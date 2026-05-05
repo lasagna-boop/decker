@@ -1,0 +1,12 @@
+{
+  "name": "decker",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Decker — iPhone↔Mac latency tester. Top-level launcher.",
+  "scripts": {
+    "dev": "npx --yes concurrently@9 -k -n agent,expo -c cyan,magenta \"npm:dev:agent\" \"npm:dev:expo\"",
+    "dev:agent": "cd agent && npm start",
+    "dev:expo": "cd mobile && npx expo start",
+    "install:all": "cd agent && npm install && cd ../mobile && npm install"
+  }
+}

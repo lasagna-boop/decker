@@ -1,0 +1,16 @@
+{
+  "expo": {
+    "name": "Decker",
+    "slug": "decker",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.decker.latency",
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "Decker needs local network access to discover your Mac on the same Wi-Fi."
+      }
+    }
+  }
+}
