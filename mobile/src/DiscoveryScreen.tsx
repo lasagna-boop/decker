@@ -31,7 +31,7 @@ export function DiscoveryScreen({ state, favorites, onConnect, onManual, onRetry
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <Text style={styles.title}>DECKER</Text>
-      <Text style={styles.subtitle}>Latency Tester</Text>
+      <Text style={styles.subtitle}>Macro Pad</Text>
 
       {favorites.length > 0 && (
         <View style={styles.section}>

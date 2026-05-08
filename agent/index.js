@@ -2,10 +2,11 @@ const http = require('http');
 const { WebSocketServer } = require('ws');
 const bonjour = require('bonjour')();
 const os = require('os');
-const { execFile } = require('child_process');
+const path = require('path');
+const fs = require('fs').promises;
+const { execFile, exec } = require('child_process');
 
 const PORT = 4242;
-let pingCount = 0;
 
 const C = {
   cyan: '\x1b[36m',
@@ -26,18 +27,6 @@ function nowTime() {
   return new Date().toTimeString().slice(0, 8);
 }
 
-function logPing(id, clientTs, serverTs, addr) {
-  const serverProcessing = serverTs - clientTs;
-  pingCount++;
-  console.log(
-    `  ${C.cyan}●${C.reset} ${C.dim}${nowTime()}${C.reset}  ` +
-    `tap ${C.bold}#${String(pingCount).padStart(4, ' ')}${C.reset}  ` +
-    `id=${String(id).padStart(4, ' ')}  ` +
-    `from ${shortAddr(addr).padEnd(15)}  ` +
-    `${C.dim}server Δ ${String(serverProcessing).padStart(2)}ms${C.reset}`
-  );
-}
-
 function logEvent(symbol, color, text) {
   console.log(`  ${color}${symbol}${C.reset} ${C.dim}${nowTime()}${C.reset}  ${text}`);
 }
@@ -54,6 +43,15 @@ function runAppleScript(lines) {
         return;
       }
       resolve(String(stdout).trim());
+    });
+  });
+}
+
+function shell(cmd) {
+  return new Promise((resolve, reject) => {
+    exec(cmd, (error, stdout, stderr) => {
+      if (error) reject(new Error(stderr?.trim() || error.message));
+      else resolve(stdout.trim());
     });
   });
 }
@@ -80,21 +78,75 @@ function sendOpenApps(ws) {
       }
     })
     .catch((error) => {
-      if (ws.readyState === ws.OPEN) {
-        ws.send(JSON.stringify({
-          type: 'command_result',
-          command: 'list_open_apps',
-          ok: false,
-          error: error.message,
-        }));
-      }
       logEvent('!', C.red, `failed to list open apps: ${error.message}`);
     });
 }
 
-async function openGoogleChrome() {
-  await runAppleScript(['tell application "Google Chrome" to activate']);
+// --- App icon extraction ---
+async function getAppIconBase64(appName) {
+  try {
+    const appPath = (await shell(
+      `find /Applications /System/Applications /System/Library/CoreServices -name "${appName}.app" -maxdepth 4 2>/dev/null | head -1`
+    )).trim();
+    if (!appPath) return null;
+
+    const iconFile = (await shell(
+      `/usr/libexec/PlistBuddy -c "Print CFBundleIconFile" "${appPath}/Contents/Info.plist" 2>/dev/null`
+    ).catch(() => '')).trim();
+    if (!iconFile) return null;
+
+    const iconName = iconFile.endsWith('.icns') ? iconFile : `${iconFile}.icns`;
+    const iconPath = path.join(appPath, 'Contents', 'Resources', iconName);
+    const tmpPath = `/tmp/decker_icon_${Date.now()}.png`;
+
+    await shell(`sips -s format png "${iconPath}" --out "${tmpPath}" --resampleWidth 64 2>/dev/null`);
+    const data = await fs.readFile(tmpPath);
+    await fs.unlink(tmpPath).catch(() => {});
+    return `data:image/png;base64,${data.toString('base64')}`;
+  } catch {
+    return null;
+  }
 }
+
+// --- Action registry ---
+const actions = {};
+
+actions['launch-app'] = async ({ appName }) => {
+  await shell(`open -a "${String(appName).replace(/"/g, '\\"')}"`);
+};
+
+actions['media-play-pause'] = async () => {
+  await runAppleScript(['tell application "Spotify" to playpause']);
+};
+
+actions['media-next'] = async () => {
+  await runAppleScript(['tell application "Spotify" to next track']);
+};
+
+actions['media-prev'] = async () => {
+  await runAppleScript(['tell application "Spotify" to previous track']);
+};
+
+actions['volume-up'] = async () => {
+  await runAppleScript([
+    'set curVol to output volume of (get volume settings)',
+    'set volume output volume (curVol + 10)',
+  ]);
+};
+
+actions['volume-down'] = async () => {
+  await runAppleScript([
+    'set curVol to output volume of (get volume settings)',
+    'set volume output volume (curVol - 10)',
+  ]);
+};
+
+actions['mute'] = async () => {
+  await runAppleScript([
+    'set curMute to output muted of (get volume settings)',
+    'set volume output muted (not curMute)',
+  ]);
+};
 
 // --- Resolve local LAN IP ---
 function getLocalIP() {
@@ -148,41 +200,39 @@ wss.on('connection', (ws) => {
       return;
     }
 
-    if (msg.type === 'ping') {
-      const serverTs = Date.now();
-      ws.send(JSON.stringify({
-        type: 'pong',
-        id: msg.id,
-        clientTs: msg.ts,
-        serverTs,
-      }));
-      logPing(msg.id, msg.ts, serverTs, ws._socket?.remoteAddress);
+    if (msg.type === 'get_icons' && Array.isArray(msg.apps)) {
+      Promise.all(msg.apps.map(async (appName) => [appName, await getAppIconBase64(appName)]))
+        .then((entries) => {
+          const icons = Object.fromEntries(entries.filter(([, v]) => v !== null));
+          if (ws.readyState === ws.OPEN) {
+            ws.send(JSON.stringify({ type: 'icons', icons }));
+          }
+          logEvent('✓', C.green, `sent icons for: ${Object.keys(icons).join(', ')}`);
+        })
+        .catch((error) => logEvent('!', C.red, `icon fetch failed: ${error.message}`));
       return;
     }
 
-    if (msg.type === 'open_chrome') {
-      openGoogleChrome()
+    if (msg.type === 'action') {
+      const handler = actions[msg.id];
+      if (!handler) {
+        if (ws.readyState === ws.OPEN) {
+          ws.send(JSON.stringify({ type: 'ack', id: msg.id, ok: false, error: 'unknown action', reqId: msg.reqId }));
+        }
+        return;
+      }
+      handler(msg.payload ?? {})
         .then(() => {
           if (ws.readyState === ws.OPEN) {
-            ws.send(JSON.stringify({
-              type: 'command_result',
-              command: 'open_chrome',
-              ok: true,
-            }));
+            ws.send(JSON.stringify({ type: 'ack', id: msg.id, ok: true, reqId: msg.reqId }));
           }
-          logEvent('✓', C.green, `open chrome requested by ${addr}`);
-          sendOpenApps(ws);
+          logEvent('✓', C.green, `action ${C.bold}${msg.id}${C.reset} by ${addr}`);
         })
         .catch((error) => {
           if (ws.readyState === ws.OPEN) {
-            ws.send(JSON.stringify({
-              type: 'command_result',
-              command: 'open_chrome',
-              ok: false,
-              error: error.message,
-            }));
+            ws.send(JSON.stringify({ type: 'ack', id: msg.id, ok: false, error: error.message, reqId: msg.reqId }));
           }
-          logEvent('!', C.red, `open chrome failed: ${error.message}`);
+          logEvent('!', C.red, `action ${msg.id} failed: ${error.message}`);
         });
     }
   });
@@ -221,12 +271,11 @@ server.listen(PORT, () => {
   console.log(`  Port      : ${PORT}`);
   console.log(`  WebSocket : ${wsUrl}`);
   console.log(`  Health    : http://${ip}:${PORT}/health`);
+  console.log(`  Actions   : ${Object.keys(actions).join(', ')}`);
 
-  // mDNS announcement (optional bonus discovery channel)
   bonjour.publish({ name: 'Decker', type: 'decker', protocol: 'tcp', port: PORT });
 
-  console.log(`\n  ${C.dim}Waiting for the iPhone to connect…${C.reset}`);
-  console.log(`  ${C.dim}Each tap on the phone will appear below as a new line.${C.reset}\n`);
+  console.log(`\n  ${C.dim}Waiting for the iPhone to connect…${C.reset}\n`);
 });
 
 process.on('SIGINT', () => {
