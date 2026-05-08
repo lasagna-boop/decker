@@ -41,6 +41,8 @@ type Props = {
 export function LatencyScreen({ url, onDisconnect }: Props) {
   const [connected, setConnected] = useState(false);
   const [peers, setPeers] = useState(0);
+  const [openApps, setOpenApps] = useState<string[]>([]);
+  const [lastCommandResult, setLastCommandResult] = useState<string | null>(null);
   const [autoEnabled, setAutoEnabled] = useState(false);
   const [intervalMs, setIntervalMs] = useState(500);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -57,6 +59,10 @@ export function LatencyScreen({ url, onDisconnect }: Props) {
         handlePong(msg.id as number);
       } else if (msg.type === 'peers') {
         setPeers(msg.count as number);
+      } else if (msg.type === 'open_apps') {
+        setOpenApps((msg.apps as string[]) ?? []);
+      } else if (msg.type === 'command_result' && msg.command === 'open_chrome') {
+        setLastCommandResult(msg.ok ? 'Chrome opened on Mac' : `Failed: ${String(msg.error ?? 'unknown error')}`);
       }
     },
     [handlePong]
@@ -137,6 +143,36 @@ export function LatencyScreen({ url, onDisconnect }: Props) {
         >
           <Text style={styles.pingBtnText}>TAP TO PING</Text>
         </TouchableOpacity>
+
+        {/* Open Chrome command */}
+        <TouchableOpacity
+          style={[styles.chromeBtn, !connected && styles.chromeBtnDisabled]}
+          onPress={() => send({ type: 'open_chrome' })}
+          disabled={!connected}
+          activeOpacity={0.7}
+        >
+          <Text style={[styles.chromeBtnText, !connected && styles.chromeBtnTextDisabled]}>
+            OPEN GOOGLE CHROME
+          </Text>
+        </TouchableOpacity>
+        {lastCommandResult ? <Text style={styles.commandStatus}>{lastCommandResult}</Text> : null}
+
+        {/* Open apps list */}
+        <View style={styles.logHeader}>
+          <Text style={styles.logTitle}>Open Apps</Text>
+        </View>
+        <View style={styles.log}>
+          {openApps.length === 0 ? (
+            <Text style={styles.logEmpty}>No apps received yet</Text>
+          ) : (
+            openApps.map((app) => (
+              <View key={app} style={styles.appRow}>
+                <Text style={styles.appBullet}>•</Text>
+                <Text style={styles.appName}>{app}</Text>
+              </View>
+            ))
+          )}
+        </View>
 
         {/* Auto-ping controls */}
         <View style={styles.autoRow}>
@@ -308,6 +344,32 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 4,
   },
+  chromeBtn: {
+    backgroundColor: '#1f1f1f',
+    borderRadius: 12,
+    paddingVertical: 16,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: CYAN,
+  },
+  chromeBtnDisabled: {
+    borderColor: '#333',
+  },
+  chromeBtnText: {
+    color: CYAN,
+    fontSize: 15,
+    fontWeight: '700',
+    letterSpacing: 2,
+  },
+  chromeBtnTextDisabled: {
+    color: '#666',
+  },
+  commandStatus: {
+    color: '#777',
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: -8,
+  },
   autoRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -377,6 +439,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 8,
     alignItems: 'baseline',
+  },
+  appRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  appBullet: {
+    color: '#444',
+    width: 12,
+  },
+  appName: {
+    color: '#bbb',
+    fontSize: 13,
+    flex: 1,
   },
   logTs: {
     color: '#444',

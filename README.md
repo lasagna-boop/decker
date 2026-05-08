@@ -1,6 +1,6 @@
 # Decker — Latency Testing Tool
 
-Quick start (2 terminals): `cd /Users/stevie/Desktop/Decker/agent && npm start` and `cd /Users/stevie/Desktop/Decker/mobile && npx expo start --lan --clear`
+Quick start (2 terminals): `cd /Users/stevie/Decker/agent && npm start` and `cd /Users/stevie/Decker/mobile && npx expo start --lan --clear`
 
 Measures real WebSocket round-trip time between an iPhone and a Mac on the same local Wi-Fi network.
 
@@ -48,7 +48,7 @@ To stop both: `Ctrl+C`.
 > # terminal 1
 > cd agent && npm start
 > # terminal 2
-> cd mobile && npx expo start
+> cd mobile && npx expo start --lan --clear
 > ```
 
 ---

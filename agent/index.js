@@ -2,6 +2,7 @@ const http = require('http');
 const { WebSocketServer } = require('ws');
 const bonjour = require('bonjour')();
 const os = require('os');
+const { execFile } = require('child_process');
 
 const PORT = 4242;
 let pingCount = 0;
@@ -39,6 +40,60 @@ function logPing(id, clientTs, serverTs, addr) {
 
 function logEvent(symbol, color, text) {
   console.log(`  ${color}${symbol}${C.reset} ${C.dim}${nowTime()}${C.reset}  ${text}`);
+}
+
+function runAppleScript(lines) {
+  return new Promise((resolve, reject) => {
+    const args = [];
+    for (const line of lines) {
+      args.push('-e', line);
+    }
+    execFile('osascript', args, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(stderr?.trim() || error.message));
+        return;
+      }
+      resolve(String(stdout).trim());
+    });
+  });
+}
+
+async function getOpenApplications() {
+  const output = await runAppleScript([
+    'tell application "System Events"',
+    'set appNames to name of every process whose background only is false',
+    'end tell',
+    'return appNames as string',
+  ]);
+  if (!output) return [];
+  return output
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean);
+}
+
+function sendOpenApps(ws) {
+  getOpenApplications()
+    .then((apps) => {
+      if (ws.readyState === ws.OPEN) {
+        ws.send(JSON.stringify({ type: 'open_apps', apps }));
+      }
+    })
+    .catch((error) => {
+      if (ws.readyState === ws.OPEN) {
+        ws.send(JSON.stringify({
+          type: 'command_result',
+          command: 'list_open_apps',
+          ok: false,
+          error: error.message,
+        }));
+      }
+      logEvent('!', C.red, `failed to list open apps: ${error.message}`);
+    });
+}
+
+async function openGoogleChrome() {
+  await runAppleScript(['tell application "Google Chrome" to activate']);
 }
 
 // --- Resolve local LAN IP ---
@@ -83,6 +138,7 @@ wss.on('connection', (ws) => {
   broadcastPeers();
   const addr = shortAddr(ws._socket?.remoteAddress);
   logEvent('▲', C.green, `client connected  ${C.bold}${addr}${C.reset}  (peers: ${clients.size})`);
+  sendOpenApps(ws);
 
   ws.on('message', (data) => {
     let msg;
@@ -101,6 +157,33 @@ wss.on('connection', (ws) => {
         serverTs,
       }));
       logPing(msg.id, msg.ts, serverTs, ws._socket?.remoteAddress);
+      return;
+    }
+
+    if (msg.type === 'open_chrome') {
+      openGoogleChrome()
+        .then(() => {
+          if (ws.readyState === ws.OPEN) {
+            ws.send(JSON.stringify({
+              type: 'command_result',
+              command: 'open_chrome',
+              ok: true,
+            }));
+          }
+          logEvent('✓', C.green, `open chrome requested by ${addr}`);
+          sendOpenApps(ws);
+        })
+        .catch((error) => {
+          if (ws.readyState === ws.OPEN) {
+            ws.send(JSON.stringify({
+              type: 'command_result',
+              command: 'open_chrome',
+              ok: false,
+              error: error.message,
+            }));
+          }
+          logEvent('!', C.red, `open chrome failed: ${error.message}`);
+        });
     }
   });
 
