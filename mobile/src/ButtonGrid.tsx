@@ -166,9 +166,9 @@ export function ButtonGrid({ url, onDisconnect }: Props) {
             >
               {iconUri ? (
                 <Image source={{ uri: iconUri }} style={styles.appIcon} />
-              ) : (
+              ) : btn.emoji && btn.action !== 'launch-app' ? (
                 <Text style={styles.emoji}>{btn.emoji}</Text>
-              )}
+              ) : null}
               <Text style={[styles.label, !connected && styles.labelDim]}>{btn.label}</Text>
             </TouchableOpacity>
           );

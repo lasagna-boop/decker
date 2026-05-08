@@ -97,7 +97,7 @@ async function getAppIconBase64(appName) {
 
     const iconName = iconFile.endsWith('.icns') ? iconFile : `${iconFile}.icns`;
     const iconPath = path.join(appPath, 'Contents', 'Resources', iconName);
-    const tmpPath = `/tmp/decker_icon_${Date.now()}.png`;
+    const tmpPath = `/tmp/decker_icon_${appName.replace(/[^a-z0-9]/gi, '_')}.png`;
 
     await shell(`sips -s format png "${iconPath}" --out "${tmpPath}" --resampleWidth 64 2>/dev/null`);
     const data = await fs.readFile(tmpPath);
