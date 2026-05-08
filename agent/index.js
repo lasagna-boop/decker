@@ -61,13 +61,13 @@ async function getOpenApplications() {
     'tell application "System Events"',
     'set appNames to name of every process whose background only is false',
     'end tell',
-    'return appNames as string',
+    'set AppleScript\'s text item delimiters to "|||"',
+    'set output to appNames as string',
+    'set AppleScript\'s text item delimiters to ""',
+    'return output',
   ]);
   if (!output) return [];
-  return output
-    .split(',')
-    .map((name) => name.trim())
-    .filter(Boolean);
+  return output.split('|||').map((n) => n.trim()).filter(Boolean);
 }
 
 function sendOpenApps(ws) {
@@ -125,6 +125,11 @@ actions['media-next'] = async () => {
 
 actions['media-prev'] = async () => {
   await runAppleScript(['tell application "Spotify" to previous track']);
+};
+
+actions['quit-app'] = async ({ appName }) => {
+  const name = String(appName).replace(/"/g, '\\"');
+  await runAppleScript([`tell application "${name}" to quit`]);
 };
 
 actions['volume-up'] = async () => {
@@ -205,7 +210,7 @@ wss.on('connection', (ws) => {
         .then((entries) => {
           const icons = Object.fromEntries(entries.filter(([, v]) => v !== null));
           if (ws.readyState === ws.OPEN) {
-            ws.send(JSON.stringify({ type: 'icons', icons }));
+            ws.send(JSON.stringify({ type: 'icons', icons, tag: msg.tag ?? null }));
           }
           logEvent('✓', C.green, `sent icons for: ${Object.keys(icons).join(', ')}`);
         })
@@ -227,6 +232,9 @@ wss.on('connection', (ws) => {
             ws.send(JSON.stringify({ type: 'ack', id: msg.id, ok: true, reqId: msg.reqId }));
           }
           logEvent('✓', C.green, `action ${C.bold}${msg.id}${C.reset} by ${addr}`);
+          if (msg.id === 'quit-app') {
+            setTimeout(() => sendOpenApps(ws), 800);
+          }
         })
         .catch((error) => {
           if (ws.readyState === ws.OPEN) {

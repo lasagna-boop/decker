@@ -4,11 +4,14 @@ import {
   Text,
   Image,
   TouchableOpacity,
+  ScrollView,
   StyleSheet,
   SafeAreaView,
   Dimensions,
   Animated,
   Easing,
+  NativeSyntheticEvent,
+  NativeScrollEvent,
 } from 'react-native';
 import { useWebSocket, WSMessage } from './useWebSocket';
 
@@ -30,12 +33,12 @@ type ButtonDef = {
 };
 
 const DECK: ButtonDef[] = [
-  { emoji: '🧭', label: 'Safari',      action: 'launch-app', payload: { appName: 'Safari' } },
-  { emoji: '🌐', label: 'Chrome',      action: 'launch-app', payload: { appName: 'Google Chrome' } },
-  { emoji: '🎵', label: 'Spotify',     action: 'launch-app', payload: { appName: 'Spotify' } },
-  { emoji: '💻', label: 'VS Code',     action: 'launch-app', payload: { appName: 'Visual Studio Code' } },
-  { emoji: '🖥',  label: 'Terminal',   action: 'launch-app', payload: { appName: 'Terminal' } },
-  { emoji: '📁', label: 'Finder',      action: 'launch-app', payload: { appName: 'Finder' } },
+  { emoji: '',   label: 'Safari',      action: 'launch-app', payload: { appName: 'Safari' } },
+  { emoji: '',   label: 'Chrome',      action: 'launch-app', payload: { appName: 'Google Chrome' } },
+  { emoji: '',   label: 'Spotify',     action: 'launch-app', payload: { appName: 'Spotify' } },
+  { emoji: '',   label: 'VS Code',     action: 'launch-app', payload: { appName: 'Visual Studio Code' } },
+  { emoji: '',   label: 'Terminal',    action: 'launch-app', payload: { appName: 'Terminal' } },
+  { emoji: '',   label: 'Finder',      action: 'launch-app', payload: { appName: 'Finder' } },
   { emoji: '⏯',  label: 'Play/Pause', action: 'media-play-pause' },
   { emoji: '⏭',  label: 'Next',       action: 'media-next' },
   { emoji: '⏮',  label: 'Prev',       action: 'media-prev' },
@@ -57,26 +60,24 @@ type Props = {
 
 export function ButtonGrid({ url, onDisconnect }: Props) {
   const [connected, setConnected] = useState(false);
+  const [currentPage, setCurrentPage] = useState(0);
+
+  // deck state
   const [btnStates, setBtnStates] = useState<Record<number, BtnState>>({});
   const [icons, setIcons] = useState<Record<string, string>>({});
+
+  // open apps state
+  const [openApps, setOpenApps] = useState<string[]>([]);
+  const [openAppIcons, setOpenAppIcons] = useState<Record<string, string>>({});
+  const [openBtnStates, setOpenBtnStates] = useState<Record<string, BtnState>>({});
 
   // background animation
   const bgAnim = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     Animated.loop(
       Animated.sequence([
-        Animated.timing(bgAnim, {
-          toValue: 1,
-          duration: 10000,
-          easing: Easing.inOut(Easing.quad),
-          useNativeDriver: true,
-        }),
-        Animated.timing(bgAnim, {
-          toValue: 0,
-          duration: 10000,
-          easing: Easing.inOut(Easing.quad),
-          useNativeDriver: true,
-        }),
+        Animated.timing(bgAnim, { toValue: 1, duration: 10000, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+        Animated.timing(bgAnim, { toValue: 0, duration: 10000, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
       ])
     ).start();
   }, [bgAnim]);
@@ -86,19 +87,30 @@ export function ButtonGrid({ url, onDisconnect }: Props) {
   const bgY = bgAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -20] });
 
   const onMessage = useCallback((msg: WSMessage) => {
-    if (msg.type === 'ack' && msg.reqId !== undefined) {
-      const idx = msg.reqId as number;
-      const state: BtnState = msg.ok ? 'ok' : 'error';
-      setBtnStates((s) => ({ ...s, [idx]: state }));
-      setTimeout(() => {
-        setBtnStates((s) => {
-          const next = { ...s };
-          delete next[idx];
-          return next;
-        });
-      }, 700);
+    if (msg.type === 'ack') {
+      if (typeof msg.reqId === 'number') {
+        const idx = msg.reqId;
+        const state: BtnState = msg.ok ? 'ok' : 'error';
+        setBtnStates((s) => ({ ...s, [idx]: state }));
+        setTimeout(() => setBtnStates((s) => { const n = { ...s }; delete n[idx]; return n; }), 700);
+      } else if (typeof msg.reqId === 'string') {
+        const appName = msg.reqId;
+        const state: BtnState = msg.ok ? 'ok' : 'error';
+        setOpenBtnStates((s) => ({ ...s, [appName]: state }));
+        setTimeout(() => setOpenBtnStates((s) => { const n = { ...s }; delete n[appName]; return n; }), 700);
+      }
     } else if (msg.type === 'icons') {
-      setIcons(msg.icons as Record<string, string>);
+      if (msg.tag === 'open') {
+        setOpenAppIcons(msg.icons as Record<string, string>);
+      } else {
+        setIcons(msg.icons as Record<string, string>);
+      }
+    } else if (msg.type === 'open_apps') {
+      const apps = (msg.apps as string[]) ?? [];
+      setOpenApps(apps);
+      if (apps.length > 0) {
+        send({ type: 'get_icons', apps, tag: 'open' });
+      }
     }
   }, []);
 
@@ -106,75 +118,123 @@ export function ButtonGrid({ url, onDisconnect }: Props) {
     onMessage,
     onOpen: () => {
       setConnected(true);
-      send({ type: 'get_icons', apps: APP_NAMES });
+      send({ type: 'get_icons', apps: APP_NAMES, tag: 'deck' });
     },
     onClose: () => { setConnected(false); onDisconnect(); },
     onError: () => { setConnected(false); onDisconnect(); },
   });
 
-  function handlePress(idx: number) {
+  function handleDeckPress(idx: number) {
     const btn = DECK[idx];
     send({ type: 'action', id: btn.action, payload: btn.payload ?? {}, reqId: idx });
   }
 
+  function handleOpenAppPress(appName: string) {
+    send({ type: 'action', id: 'launch-app', payload: { appName }, reqId: appName });
+  }
+
+  function handleQuitApp(appName: string) {
+    send({ type: 'action', id: 'quit-app', payload: { appName }, reqId: `quit:${appName}` });
+  }
+
+  function onScroll(e: NativeSyntheticEvent<NativeScrollEvent>) {
+    const page = Math.round(e.nativeEvent.contentOffset.x / width);
+    setCurrentPage(page);
+  }
+
   return (
     <View style={styles.root}>
-      {/* animated background — outside SafeAreaView so it fills the full screen */}
       <Animated.Image
         source={require('../assets/bg.jpg')}
-        style={[
-          StyleSheet.absoluteFill,
-          { transform: [{ scale: bgScale }, { translateX: bgX }, { translateY: bgY }] },
-        ]}
+        style={[StyleSheet.absoluteFill, { transform: [{ scale: bgScale }, { translateX: bgX }, { translateY: bgY }] }]}
         resizeMode="cover"
       />
       <View style={styles.overlay} pointerEvents="none" />
 
-    <SafeAreaView style={styles.safe}>
-
-      <View style={styles.header}>
-        <View style={styles.headerSide} />
-        <View style={styles.headerCenter}>
-          <Text style={styles.title}>DECKER</Text>
-          <View style={[styles.dot, connected ? styles.dotOn : styles.dotOff]} />
-        </View>
-        <View style={styles.headerSide}>
-          <TouchableOpacity onPress={onDisconnect} style={styles.disconnectBtn}>
-            <Text style={styles.disconnectText}>✕</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      <View style={styles.grid}>
-        {DECK.map((btn, idx) => {
-          const state = btnStates[idx];
-          const appName = btn.action === 'launch-app' ? btn.payload!.appName as string : undefined;
-          const iconUri = appName ? icons[appName] : undefined;
-
-          return (
-            <TouchableOpacity
-              key={idx}
-              style={[
-                styles.btn,
-                state === 'ok' && styles.btnOk,
-                state === 'error' && styles.btnError,
-                !connected && styles.btnDisabled,
-              ]}
-              onPress={() => handlePress(idx)}
-              disabled={!connected}
-              activeOpacity={0.5}
-            >
-              {iconUri ? (
-                <Image source={{ uri: iconUri }} style={styles.appIcon} />
-              ) : btn.emoji && btn.action !== 'launch-app' ? (
-                <Text style={styles.emoji}>{btn.emoji}</Text>
-              ) : null}
-              <Text style={[styles.label, !connected && styles.labelDim]}>{btn.label}</Text>
+      <SafeAreaView style={styles.safe}>
+        {/* header */}
+        <View style={styles.header}>
+          <View style={styles.headerSide} />
+          <View style={styles.headerCenter}>
+            <Text style={styles.title}>DECKER</Text>
+            <View style={[styles.connDot, connected ? styles.connDotOn : styles.connDotOff]} />
+          </View>
+          <View style={styles.headerSide}>
+            <TouchableOpacity onPress={onDisconnect} style={styles.disconnectBtn}>
+              <Text style={styles.disconnectText}>✕</Text>
             </TouchableOpacity>
-          );
-        })}
-      </View>
-    </SafeAreaView>
+          </View>
+        </View>
+
+        {/* paged content */}
+        <ScrollView
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          onMomentumScrollEnd={onScroll}
+          style={styles.pager}
+        >
+          {/* Page 1 — Deck */}
+          <View style={styles.page}>
+            <View style={styles.grid}>
+              {DECK.map((btn, idx) => {
+                const state = btnStates[idx];
+                const appName = btn.action === 'launch-app' ? btn.payload!.appName as string : undefined;
+                const iconUri = appName ? icons[appName] : undefined;
+                return (
+                  <TouchableOpacity
+                    key={idx}
+                    style={[styles.btn, state === 'ok' && styles.btnOk, state === 'error' && styles.btnError, !connected && styles.btnDisabled]}
+                    onPress={() => handleDeckPress(idx)}
+                    disabled={!connected}
+                    activeOpacity={0.5}
+                  >
+                    {iconUri ? (
+                      <Image source={{ uri: iconUri }} style={styles.appIcon} />
+                    ) : btn.emoji ? (
+                      <Text style={styles.emoji}>{btn.emoji}</Text>
+                    ) : null}
+                    <Text style={[styles.label, !connected && styles.labelDim]} numberOfLines={1}>{btn.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+
+          {/* Page 2 — Open Apps */}
+          <View style={styles.page}>
+            <Text style={styles.pageHint}>tap to open · hold to quit</Text>
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.grid}>
+              {openApps.map((appName) => {
+                const state = openBtnStates[appName];
+                const iconUri = openAppIcons[appName];
+                return (
+                  <TouchableOpacity
+                    key={appName}
+                    style={[styles.btn, state === 'ok' && styles.btnOk, state === 'error' && styles.btnError, !connected && styles.btnDisabled]}
+                    onPress={() => handleOpenAppPress(appName)}
+                    onLongPress={() => handleQuitApp(appName)}
+                    delayLongPress={500}
+                    disabled={!connected}
+                    activeOpacity={0.5}
+                  >
+                    {iconUri ? (
+                      <Image source={{ uri: iconUri }} style={styles.appIcon} />
+                    ) : null}
+                    <Text style={[styles.label, !connected && styles.labelDim]} numberOfLines={1}>{appName}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </ScrollView>
+
+        {/* page indicator dots */}
+        <View style={styles.pageIndicator}>
+          <View style={[styles.pageDot, currentPage === 0 && styles.pageDotActive]} />
+          <View style={[styles.pageDot, currentPage === 1 && styles.pageDotActive]} />
+        </View>
+      </SafeAreaView>
     </View>
   );
 }
@@ -190,13 +250,13 @@ const styles = StyleSheet.create({
   },
   overlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.52)',
+    backgroundColor: 'rgba(0,0,0,0.52)',
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingTop: 16,
-    paddingBottom: 20,
+    paddingBottom: 16,
     paddingHorizontal: PAD,
   },
   headerSide: {
@@ -214,17 +274,13 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 8,
   },
-  dot: {
+  connDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
   },
-  dotOn: {
-    backgroundColor: GREEN,
-  },
-  dotOff: {
-    backgroundColor: '#555',
-  },
+  connDotOn: { backgroundColor: GREEN },
+  connDotOff: { backgroundColor: '#555' },
   disconnectBtn: {
     padding: 8,
   },
@@ -232,6 +288,13 @@ const styles = StyleSheet.create({
     color: '#666',
     fontSize: 18,
     fontWeight: '300',
+  },
+  pager: {
+    flex: 1,
+  },
+  page: {
+    width,
+    flex: 1,
   },
   grid: {
     flexDirection: 'row',
@@ -242,21 +305,22 @@ const styles = StyleSheet.create({
   btn: {
     width: BTN_SIZE,
     height: BTN_SIZE,
-    backgroundColor: 'rgba(20, 20, 40, 0.72)',
+    backgroundColor: 'rgba(20,20,40,0.72)',
     borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.08)',
     gap: 8,
+    paddingHorizontal: 6,
   },
   btnOk: {
     borderColor: GREEN,
-    backgroundColor: 'rgba(0, 40, 25, 0.8)',
+    backgroundColor: 'rgba(0,40,25,0.8)',
   },
   btnError: {
     borderColor: RED,
-    backgroundColor: 'rgba(50, 10, 5, 0.8)',
+    backgroundColor: 'rgba(50,10,5,0.8)',
   },
   btnDisabled: {
     opacity: 0.35,
@@ -274,8 +338,32 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     letterSpacing: 0.5,
+    textAlign: 'center',
   },
   labelDim: {
     color: '#555',
+  },
+  pageHint: {
+    color: '#444',
+    fontSize: 11,
+    textAlign: 'center',
+    letterSpacing: 0.5,
+    marginBottom: 12,
+  },
+  pageIndicator: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 12,
+  },
+  pageDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#333',
+  },
+  pageDotActive: {
+    backgroundColor: CYAN,
   },
 });
