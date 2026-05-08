@@ -69,6 +69,7 @@ export function ButtonGrid({ url, onDisconnect }: Props) {
   // open apps state
   const [openApps, setOpenApps] = useState<string[]>([]);
   const [openAppIcons, setOpenAppIcons] = useState<Record<string, string>>({});
+  const openAppIconsRef = useRef<Record<string, string>>({});
   const [openBtnStates, setOpenBtnStates] = useState<Record<string, BtnState>>({});
 
   // background animation
@@ -101,15 +102,18 @@ export function ButtonGrid({ url, onDisconnect }: Props) {
       }
     } else if (msg.type === 'icons') {
       if (msg.tag === 'open') {
-        setOpenAppIcons(msg.icons as Record<string, string>);
+        const merged = { ...openAppIconsRef.current, ...(msg.icons as Record<string, string>) };
+        openAppIconsRef.current = merged;
+        setOpenAppIcons(merged);
       } else {
         setIcons(msg.icons as Record<string, string>);
       }
     } else if (msg.type === 'open_apps') {
       const apps = (msg.apps as string[]) ?? [];
       setOpenApps(apps);
-      if (apps.length > 0) {
-        send({ type: 'get_icons', apps, tag: 'open' });
+      const newApps = apps.filter((a) => !openAppIconsRef.current[a]);
+      if (newApps.length > 0) {
+        send({ type: 'get_icons', apps: newApps, tag: 'open' });
       }
     }
   }, []);

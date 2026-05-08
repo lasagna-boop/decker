@@ -70,20 +70,48 @@ async function getOpenApplications() {
   return output.split('|||').map((n) => n.trim()).filter(Boolean);
 }
 
-function sendOpenApps(ws) {
+function sendOpenApps(ws, apps) {
+  if (ws.readyState === ws.OPEN) {
+    ws.send(JSON.stringify({ type: 'open_apps', apps }));
+  }
+}
+
+function startPolling(ws) {
+  let lastKey = '';
+  let running = true;
+
+  async function tick() {
+    if (!running || ws.readyState !== ws.OPEN) return;
+    try {
+      const apps = await getOpenApplications();
+      const key = apps.join('|');
+      if (key !== lastKey) {
+        lastKey = key;
+        sendOpenApps(ws, apps);
+      }
+    } catch {
+      // ignore polling errors silently
+    }
+    if (running) setTimeout(tick, 3000);
+  }
+
+  // send immediately on connect, then start polling
   getOpenApplications()
     .then((apps) => {
-      if (ws.readyState === ws.OPEN) {
-        ws.send(JSON.stringify({ type: 'open_apps', apps }));
-      }
+      lastKey = apps.join('|');
+      sendOpenApps(ws, apps);
+      setTimeout(tick, 3000);
     })
-    .catch((error) => {
-      logEvent('!', C.red, `failed to list open apps: ${error.message}`);
-    });
+    .catch(() => setTimeout(tick, 3000));
+
+  return () => { running = false; };
 }
 
 // --- App icon extraction ---
+const iconCache = new Map();
+
 async function getAppIconBase64(appName) {
+  if (iconCache.has(appName)) return iconCache.get(appName);
   try {
     const appPath = (await shell(
       `find /Applications /System/Applications /System/Library/CoreServices -name "${appName}.app" -maxdepth 4 2>/dev/null | head -1`
@@ -102,7 +130,9 @@ async function getAppIconBase64(appName) {
     await shell(`sips -s format png "${iconPath}" --out "${tmpPath}" --resampleWidth 64 2>/dev/null`);
     const data = await fs.readFile(tmpPath);
     await fs.unlink(tmpPath).catch(() => {});
-    return `data:image/png;base64,${data.toString('base64')}`;
+    const result = `data:image/png;base64,${data.toString('base64')}`;
+    iconCache.set(appName, result);
+    return result;
   } catch {
     return null;
   }
@@ -195,7 +225,7 @@ wss.on('connection', (ws) => {
   broadcastPeers();
   const addr = shortAddr(ws._socket?.remoteAddress);
   logEvent('▲', C.green, `client connected  ${C.bold}${addr}${C.reset}  (peers: ${clients.size})`);
-  sendOpenApps(ws);
+  const stopPolling = startPolling(ws);
 
   ws.on('message', (data) => {
     let msg;
@@ -232,9 +262,6 @@ wss.on('connection', (ws) => {
             ws.send(JSON.stringify({ type: 'ack', id: msg.id, ok: true, reqId: msg.reqId }));
           }
           logEvent('✓', C.green, `action ${C.bold}${msg.id}${C.reset} by ${addr}`);
-          if (msg.id === 'quit-app') {
-            setTimeout(() => sendOpenApps(ws), 800);
-          }
         })
         .catch((error) => {
           if (ws.readyState === ws.OPEN) {
@@ -246,12 +273,14 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
+    stopPolling();
     clients.delete(ws);
     broadcastPeers();
     logEvent('▽', C.yellow, `client disconnected  ${addr}  (peers: ${clients.size})`);
   });
 
   ws.on('error', () => {
+    stopPolling();
     clients.delete(ws);
     broadcastPeers();
   });
