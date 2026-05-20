@@ -7,6 +7,9 @@ const fs = require('fs').promises;
 const { execFile, exec } = require('child_process');
 
 const PORT = 4242;
+const IGNORED_APPS = new Set(['osascript']);
+const OPEN_APPS_POLL_MS = 3000;
+const ACTIVE_APP_POLL_MS = 700;
 
 const C = {
   cyan: '\x1b[36m',
@@ -56,6 +59,33 @@ function shell(cmd) {
   });
 }
 
+function escapeAppleScriptString(value) {
+  return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+async function pressShortcut(appName, scriptLine) {
+  const safeName = escapeAppleScriptString(appName);
+  await runAppleScript([
+    `tell application "${safeName}" to activate`,
+    'delay 0.12',
+    'tell application "System Events"',
+    scriptLine,
+    'end tell',
+  ]);
+}
+
+async function pressChromeShortcut(scriptLine) {
+  await runAppleScript([
+    'tell application "Google Chrome" to activate',
+    'delay 0.15',
+    'tell application "System Events"',
+    'tell process "Google Chrome"',
+    scriptLine,
+    'end tell',
+    'end tell',
+  ]);
+}
+
 async function getOpenApplications() {
   const output = await runAppleScript([
     'tell application "System Events"',
@@ -67,7 +97,36 @@ async function getOpenApplications() {
     'return output',
   ]);
   if (!output) return [];
-  return output.split('|||').map((n) => n.trim()).filter(Boolean);
+  return output
+    .split('|||')
+    .map((n) => n.trim())
+    .filter((name) => Boolean(name) && !IGNORED_APPS.has(name.toLowerCase()));
+}
+
+async function getFrontmostApplication() {
+  const output = await runAppleScript([
+    'tell application "System Events"',
+    'name of first application process whose frontmost is true',
+    'end tell',
+  ]);
+  const name = String(output || '').trim();
+  if (!name || IGNORED_APPS.has(name.toLowerCase())) return '';
+  return name;
+}
+
+async function getInstalledApplications() {
+  const output = await shell(
+    'find /Applications /System/Applications /System/Library/CoreServices -maxdepth 3 -name "*.app" -print 2>/dev/null'
+  );
+  if (!output) return [];
+  const unique = new Set(
+    output
+      .split('\n')
+      .map((line) => path.basename(line.trim()))
+      .filter(Boolean)
+      .map((name) => name.replace(/\.app$/i, ''))
+  );
+  return Array.from(unique).sort((a, b) => a.localeCompare(b));
 }
 
 function sendOpenApps(ws, apps) {
@@ -76,11 +135,18 @@ function sendOpenApps(ws, apps) {
   }
 }
 
+function sendActiveApp(ws, appName) {
+  if (ws.readyState === ws.OPEN) {
+    ws.send(JSON.stringify({ type: 'active_app', appName }));
+  }
+}
+
 function startPolling(ws) {
   let lastKey = '';
+  let lastFrontmost = '';
   let running = true;
 
-  async function tick() {
+  async function tickOpenApps() {
     if (!running || ws.readyState !== ws.OPEN) return;
     try {
       const apps = await getOpenApplications();
@@ -92,17 +158,39 @@ function startPolling(ws) {
     } catch {
       // ignore polling errors silently
     }
-    if (running) setTimeout(tick, 3000);
+    if (running) setTimeout(tickOpenApps, OPEN_APPS_POLL_MS);
+  }
+
+  async function tickActiveApp() {
+    if (!running || ws.readyState !== ws.OPEN) return;
+    try {
+      const activeApp = await getFrontmostApplication().catch(() => '');
+      if (activeApp && activeApp !== lastFrontmost) {
+        lastFrontmost = activeApp;
+        sendActiveApp(ws, activeApp);
+      }
+    } catch {
+      // ignore polling errors silently
+    }
+    if (running) setTimeout(tickActiveApp, ACTIVE_APP_POLL_MS);
   }
 
   // send immediately on connect, then start polling
-  getOpenApplications()
-    .then((apps) => {
+  Promise.all([getOpenApplications(), getFrontmostApplication().catch(() => '')])
+    .then(([apps, activeApp]) => {
       lastKey = apps.join('|');
       sendOpenApps(ws, apps);
-      setTimeout(tick, 3000);
+      if (activeApp) {
+        lastFrontmost = activeApp;
+        sendActiveApp(ws, activeApp);
+      }
+      setTimeout(tickOpenApps, OPEN_APPS_POLL_MS);
+      setTimeout(tickActiveApp, ACTIVE_APP_POLL_MS);
     })
-    .catch(() => setTimeout(tick, 3000));
+    .catch(() => {
+      setTimeout(tickOpenApps, OPEN_APPS_POLL_MS);
+      setTimeout(tickActiveApp, ACTIVE_APP_POLL_MS);
+    });
 
   return () => { running = false; };
 }
@@ -183,6 +271,126 @@ actions['mute'] = async () => {
   ]);
 };
 
+actions['chrome-tab-left'] = async () => {
+  await pressChromeShortcut('key code 123 using {command down, option down}');
+};
+
+actions['chrome-reload'] = async () => {
+  // No keyboard simulation — keystrokes were causing select-all / no reload on some layouts.
+
+  try {
+    await runAppleScript([
+      'tell application "Google Chrome"',
+      'if (count of windows) = 0 then error "No Chrome window"',
+      'activate',
+      'reload active tab of front window',
+      'end tell',
+    ]);
+    return;
+  } catch {
+    // continue to next strategy
+  }
+
+  try {
+    await runAppleScript([
+      'tell application "Google Chrome"',
+      'activate',
+      'tell active tab of front window',
+      'execute javascript "location.reload()"',
+      'end tell',
+      'end tell',
+    ]);
+    return;
+  } catch {
+    // continue to next strategy
+  }
+
+  await runAppleScript([
+    'tell application "Google Chrome" to activate',
+    'delay 0.2',
+    'tell application "System Events"',
+    'tell process "Google Chrome"',
+    'set viewMenu to menu bar item "View" of menu bar 1',
+    'try',
+    'click menu item "Reload This Page" of menu 1 of viewMenu',
+    'on error',
+    'try',
+    'click menu item "Reload" of menu 1 of viewMenu',
+    'on error',
+    'set viewMenuRu to menu bar item "Вид" of menu bar 1',
+    'click menu item "Обновить эту страницу" of menu 1 of viewMenuRu',
+    'end try',
+    'end try',
+    'end tell',
+    'end tell',
+  ]);
+};
+
+actions['chrome-tab-right'] = async () => {
+  await pressChromeShortcut('key code 124 using {command down, option down}');
+};
+
+actions['word-save'] = async () => {
+  await runAppleScript([
+    'tell application "Microsoft Word"',
+    'if not (exists active document) then error "No active Word document"',
+    'save active document',
+    'end tell',
+  ]);
+};
+
+actions['word-print'] = async () => {
+  const frontmostApp = await runAppleScript([
+    'tell application "System Events"',
+    'name of first application process whose frontmost is true',
+    'end tell',
+  ]).catch(() => '');
+
+  const script = [
+    'tell application "Microsoft Word"',
+    'if not (exists active document) then error "No active Word document"',
+  ];
+
+  if (frontmostApp !== 'Microsoft Word') {
+    script.push('activate', 'delay 0.05');
+  }
+
+  script.push(
+    'end tell',
+    'tell application "System Events"',
+    'key code 35 using {command down}',
+    'end tell'
+  );
+
+  await runAppleScript(script);
+};
+
+actions['word-copy-file'] = async () => {
+  const posixPath = await runAppleScript([
+    'tell application "Microsoft Word"',
+    'if not (exists active document) then error "No active Word document"',
+    'save active document',
+    'set docPath to full name of active document',
+    'end tell',
+    'return POSIX path of docPath',
+  ]);
+
+  const escapedPath = escapeAppleScriptString(posixPath);
+  await runAppleScript([
+    `set targetFile to POSIX file "${escapedPath}" as alias`,
+    'tell application "Finder"',
+    'activate',
+    'reveal targetFile',
+    'delay 0.15',
+    'set selection to {targetFile}',
+    'end tell',
+    'delay 0.12',
+    'tell application "System Events"',
+    'key code 8 using {command down}',
+    'end tell',
+  ]);
+};
+
 // --- Resolve local LAN IP ---
 function getLocalIP() {
   const ifaces = os.networkInterfaces();
@@ -245,6 +453,23 @@ wss.on('connection', (ws) => {
           logEvent('✓', C.green, `sent icons for: ${Object.keys(icons).join(', ')}`);
         })
         .catch((error) => logEvent('!', C.red, `icon fetch failed: ${error.message}`));
+      return;
+    }
+
+    if (msg.type === 'list_installed_apps') {
+      getInstalledApplications()
+        .then((apps) => {
+          if (ws.readyState === ws.OPEN) {
+            ws.send(JSON.stringify({ type: 'installed_apps', apps }));
+          }
+          logEvent('✓', C.green, `sent installed apps: ${apps.length}`);
+        })
+        .catch((error) => {
+          if (ws.readyState === ws.OPEN) {
+            ws.send(JSON.stringify({ type: 'installed_apps', apps: [], error: error.message }));
+          }
+          logEvent('!', C.red, `installed apps failed: ${error.message}`);
+        });
       return;
     }
 

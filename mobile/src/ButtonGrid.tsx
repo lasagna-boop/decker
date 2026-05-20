@@ -10,9 +10,12 @@ import {
   Dimensions,
   Animated,
   Easing,
+  Modal,
+  TextInput,
   NativeSyntheticEvent,
   NativeScrollEvent,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useWebSocket, WSMessage } from './useWebSocket';
 
 const CYAN = '#00e5ff';
@@ -24,34 +27,53 @@ const COLS = 3;
 const PAD = 16;
 const GAP = 10;
 const BTN_SIZE = (width - PAD * 2 - GAP * (COLS - 1)) / COLS;
+const SLOT_COUNT = 9;
+const LAUNCHER_SLOTS_KEY = 'decker.launcherSlots.v1';
 
-type ButtonDef = {
-  emoji: string;
-  label: string;
-  action: string;
-  payload?: Record<string, unknown>;
-};
-
-const DECK: ButtonDef[] = [
-  { emoji: '',   label: 'Safari',      action: 'launch-app', payload: { appName: 'Safari' } },
-  { emoji: '',   label: 'Chrome',      action: 'launch-app', payload: { appName: 'Google Chrome' } },
-  { emoji: '',   label: 'Spotify',     action: 'launch-app', payload: { appName: 'Spotify' } },
-  { emoji: '',   label: 'VS Code',     action: 'launch-app', payload: { appName: 'Visual Studio Code' } },
-  { emoji: '',   label: 'Terminal',    action: 'launch-app', payload: { appName: 'Terminal' } },
-  { emoji: '',   label: 'Finder',      action: 'launch-app', payload: { appName: 'Finder' } },
-  { emoji: '⏯',  label: 'Play/Pause', action: 'media-play-pause' },
-  { emoji: '⏭',  label: 'Next',       action: 'media-next' },
-  { emoji: '⏮',  label: 'Prev',       action: 'media-prev' },
-  { emoji: '🔊', label: 'Vol +',       action: 'volume-up' },
-  { emoji: '🔉', label: 'Vol −',       action: 'volume-down' },
-  { emoji: '🔇', label: 'Mute',        action: 'mute' },
-];
-
-const APP_NAMES = DECK
-  .filter((b) => b.action === 'launch-app')
-  .map((b) => b.payload!.appName as string);
+const FIRST_PAGE_SLOTS = Array.from({ length: SLOT_COUNT }, (_, idx) => idx);
+const EMPTY_SLOTS = Array.from({ length: SLOT_COUNT }, () => null as string | null);
 
 type BtnState = 'ok' | 'error';
+type PresetAction = { id: string; label: string };
+
+const APP_PRESETS: Array<{ match: RegExp; actions: PresetAction[] }> = [
+  {
+    match: /spotify/i,
+    actions: [
+      { id: 'media-prev', label: 'Prev track' },
+      { id: 'media-play-pause', label: 'Play / Pause' },
+      { id: 'media-next', label: 'Next track' },
+    ],
+  },
+  {
+    match: /(google chrome|chrome)/i,
+    actions: [
+      { id: 'chrome-tab-left', label: 'Tab left' },
+      { id: 'chrome-reload', label: 'Reload page' },
+      { id: 'chrome-tab-right', label: 'Tab right' },
+    ],
+  },
+  {
+    match: /(microsoft word|word)/i,
+    actions: [
+      { id: 'word-save', label: 'Save' },
+      { id: 'word-copy-file', label: 'Copy file to clipboard' },
+      { id: 'word-print', label: 'Print' },
+    ],
+  },
+];
+
+function getPresetActions(appName: string): PresetAction[] {
+  for (const preset of APP_PRESETS) {
+    if (preset.match.test(appName)) return preset.actions;
+  }
+  return [];
+}
+
+function sameAppName(a: string | null, b: string | null): boolean {
+  if (!a || !b) return false;
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
 
 type Props = {
   url: string;
@@ -61,10 +83,17 @@ type Props = {
 export function ButtonGrid({ url, onDisconnect }: Props) {
   const [connected, setConnected] = useState(false);
   const [currentPage, setCurrentPage] = useState(0);
-
-  // deck state
-  const [btnStates, setBtnStates] = useState<Record<number, BtnState>>({});
-  const [icons, setIcons] = useState<Record<string, string>>({});
+  const [launcherSlots, setLauncherSlots] = useState<Array<string | null>>(EMPTY_SLOTS);
+  const [launcherIcons, setLauncherIcons] = useState<Record<string, string>>({});
+  const launcherIconsRef = useRef<Record<string, string>>({});
+  const [slotBtnStates, setSlotBtnStates] = useState<Record<number, BtnState>>({});
+  const [pickerVisible, setPickerVisible] = useState(false);
+  const [pickerSlotIdx, setPickerSlotIdx] = useState<number | null>(null);
+  const [pickerQuery, setPickerQuery] = useState('');
+  const [installedApps, setInstalledApps] = useState<string[]>([]);
+  const [activePresetSlotIdx, setActivePresetSlotIdx] = useState<number | null>(null);
+  const [activePresetAppName, setActivePresetAppName] = useState('');
+  const [activeAppName, setActiveAppName] = useState<string | null>(null);
 
   // open apps state
   const [openApps, setOpenApps] = useState<string[]>([]);
@@ -87,27 +116,71 @@ export function ButtonGrid({ url, onDisconnect }: Props) {
   const bgX = bgAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -30] });
   const bgY = bgAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -20] });
 
+  useEffect(() => {
+    AsyncStorage.getItem(LAUNCHER_SLOTS_KEY)
+      .then((raw) => {
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return;
+        const normalized = EMPTY_SLOTS.map((_, idx) => {
+          const value = parsed[idx];
+          return typeof value === 'string' && value.trim().length > 0 ? value : null;
+        });
+        setLauncherSlots(normalized);
+      })
+      .catch(() => {
+        // best effort
+      });
+  }, []);
+
+  useEffect(() => {
+    const apps = launcherSlots.filter((app): app is string => Boolean(app));
+    if (!connected || apps.length === 0) return;
+    const missing = apps.filter((appName) => !launcherIconsRef.current[appName]);
+    if (missing.length > 0) {
+      send({ type: 'get_icons', apps: missing, tag: 'launcher' });
+    }
+  }, [connected, launcherSlots]);
+
   const onMessage = useCallback((msg: WSMessage) => {
     if (msg.type === 'ack') {
-      if (typeof msg.reqId === 'number') {
-        const idx = msg.reqId;
+      if (typeof msg.reqId === 'string') {
         const state: BtnState = msg.ok ? 'ok' : 'error';
-        setBtnStates((s) => ({ ...s, [idx]: state }));
-        setTimeout(() => setBtnStates((s) => { const n = { ...s }; delete n[idx]; return n; }), 700);
-      } else if (typeof msg.reqId === 'string') {
-        const appName = msg.reqId;
-        const state: BtnState = msg.ok ? 'ok' : 'error';
-        setOpenBtnStates((s) => ({ ...s, [appName]: state }));
-        setTimeout(() => setOpenBtnStates((s) => { const n = { ...s }; delete n[appName]; return n; }), 700);
+        if (msg.reqId.startsWith('slot:')) {
+          const idx = Number(msg.reqId.replace('slot:', ''));
+          if (!Number.isNaN(idx)) {
+            setSlotBtnStates((s) => ({ ...s, [idx]: state }));
+            setTimeout(
+              () =>
+                setSlotBtnStates((s) => {
+                  const n = { ...s };
+                  delete n[idx];
+                  return n;
+                }),
+              700
+            );
+          }
+        } else {
+          const appName = msg.reqId;
+          setOpenBtnStates((s) => ({ ...s, [appName]: state }));
+          setTimeout(() => setOpenBtnStates((s) => { const n = { ...s }; delete n[appName]; return n; }), 700);
+        }
       }
     } else if (msg.type === 'icons') {
       if (msg.tag === 'open') {
         const merged = { ...openAppIconsRef.current, ...(msg.icons as Record<string, string>) };
         openAppIconsRef.current = merged;
         setOpenAppIcons(merged);
-      } else {
-        setIcons(msg.icons as Record<string, string>);
+      } else if (msg.tag === 'launcher') {
+        const merged = { ...launcherIconsRef.current, ...(msg.icons as Record<string, string>) };
+        launcherIconsRef.current = merged;
+        setLauncherIcons(merged);
       }
+    } else if (msg.type === 'installed_apps') {
+      const apps = Array.isArray(msg.apps) ? (msg.apps as string[]) : [];
+      setInstalledApps(apps);
+    } else if (msg.type === 'active_app') {
+      setActiveAppName(typeof msg.appName === 'string' ? msg.appName : null);
     } else if (msg.type === 'open_apps') {
       const apps = (msg.apps as string[]) ?? [];
       setOpenApps(apps);
@@ -122,15 +195,17 @@ export function ButtonGrid({ url, onDisconnect }: Props) {
     onMessage,
     onOpen: () => {
       setConnected(true);
-      send({ type: 'get_icons', apps: APP_NAMES, tag: 'deck' });
+      send({ type: 'list_installed_apps' });
     },
     onClose: () => { setConnected(false); onDisconnect(); },
     onError: () => { setConnected(false); onDisconnect(); },
   });
 
-  function handleDeckPress(idx: number) {
-    const btn = DECK[idx];
-    send({ type: 'action', id: btn.action, payload: btn.payload ?? {}, reqId: idx });
+  function persistLauncherSlots(next: Array<string | null>) {
+    setLauncherSlots(next);
+    void AsyncStorage.setItem(LAUNCHER_SLOTS_KEY, JSON.stringify(next)).catch(() => {
+      // best effort
+    });
   }
 
   function handleOpenAppPress(appName: string) {
@@ -140,6 +215,61 @@ export function ButtonGrid({ url, onDisconnect }: Props) {
   function handleQuitApp(appName: string) {
     send({ type: 'action', id: 'quit-app', payload: { appName }, reqId: `quit:${appName}` });
   }
+
+  function handleSlotPress(slotIndex: number) {
+    const appName = launcherSlots[slotIndex];
+    if (appName) {
+      send({ type: 'action', id: 'launch-app', payload: { appName }, reqId: `slot:${slotIndex}` });
+      setActiveAppName(appName);
+      const presetActions = getPresetActions(appName);
+      if (presetActions.length > 0) {
+        setActivePresetSlotIdx(slotIndex);
+        setActivePresetAppName(appName);
+      } else {
+        setActivePresetSlotIdx(null);
+        setActivePresetAppName('');
+      }
+      return;
+    }
+    setPickerSlotIdx(slotIndex);
+    setPickerQuery('');
+    setPickerVisible(true);
+  }
+
+  function handleSelectApp(appName: string) {
+    if (pickerSlotIdx === null) return;
+    const next = [...launcherSlots];
+    next[pickerSlotIdx] = appName;
+    persistLauncherSlots(next);
+    if (connected && !launcherIconsRef.current[appName]) {
+      send({ type: 'get_icons', apps: [appName], tag: 'launcher' });
+    }
+    setPickerVisible(false);
+    setPickerSlotIdx(null);
+  }
+
+  function handlePresetActionPress(actionId: string) {
+    if (activePresetSlotIdx === null) return;
+    send({
+      type: 'action',
+      id: actionId,
+      reqId: `slot:${activePresetSlotIdx}`,
+      payload: { appName: activePresetAppName },
+    });
+  }
+
+  const pickerSource = installedApps.length > 0 ? installedApps : openApps;
+  const q = pickerQuery.trim().toLowerCase();
+  const filteredApps = pickerSource
+    .filter((app) => (q ? app.toLowerCase().includes(q) : true))
+    .slice(0, 120);
+
+  function closePicker() {
+    setPickerVisible(false);
+    setPickerSlotIdx(null);
+  }
+
+  const activePresetActions = activePresetAppName ? getPresetActions(activePresetAppName) : [];
 
   function onScroll(e: NativeSyntheticEvent<NativeScrollEvent>) {
     const page = Math.round(e.nativeEvent.contentOffset.x / width);
@@ -180,28 +310,68 @@ export function ButtonGrid({ url, onDisconnect }: Props) {
         >
           {/* Page 1 — Deck */}
           <View style={styles.page}>
-            <View style={styles.grid}>
-              {DECK.map((btn, idx) => {
-                const state = btnStates[idx];
-                const appName = btn.action === 'launch-app' ? btn.payload!.appName as string : undefined;
-                const iconUri = appName ? icons[appName] : undefined;
-                return (
-                  <TouchableOpacity
-                    key={idx}
-                    style={[styles.btn, state === 'ok' && styles.btnOk, state === 'error' && styles.btnError, !connected && styles.btnDisabled]}
-                    onPress={() => handleDeckPress(idx)}
-                    disabled={!connected}
-                    activeOpacity={0.5}
-                  >
-                    {iconUri ? (
-                      <Image source={{ uri: iconUri }} style={styles.appIcon} />
-                    ) : btn.emoji ? (
-                      <Text style={styles.emoji}>{btn.emoji}</Text>
-                    ) : null}
-                    <Text style={[styles.label, !connected && styles.labelDim]} numberOfLines={1}>{btn.label}</Text>
-                  </TouchableOpacity>
-                );
-              })}
+            <View style={styles.launcherPage}>
+              <Text style={styles.launcherHint}>tap app to open · actions appear below</Text>
+              <View style={styles.grid}>
+                {FIRST_PAGE_SLOTS.map((slotIdx) => {
+                  const appName = launcherSlots[slotIdx];
+                  const iconUri = appName ? launcherIcons[appName] : null;
+                  const state = slotBtnStates[slotIdx];
+                  const isActive = sameAppName(appName, activeAppName);
+                  return (
+                    <TouchableOpacity
+                      key={slotIdx}
+                      style={[
+                        styles.glassSlot,
+                        isActive && styles.btnActive,
+                        state === 'ok' && styles.btnOk,
+                        state === 'error' && styles.btnError,
+                      ]}
+                      onPress={() => handleSlotPress(slotIdx)}
+                      activeOpacity={0.7}
+                    >
+                      {appName ? (
+                        <>
+                          {iconUri ? (
+                            <Image source={{ uri: iconUri }} style={styles.appIcon} />
+                          ) : (
+                            <View style={styles.plusWrap}>
+                              <Text style={styles.plusText}>•</Text>
+                            </View>
+                          )}
+                          <Text style={styles.slotLabel} numberOfLines={1}>
+                            {appName}
+                          </Text>
+                        </>
+                      ) : (
+                        <>
+                          <View style={styles.plusWrap}>
+                            <Text style={styles.plusText}>＋</Text>
+                          </View>
+                          <Text style={[styles.slotLabel, !connected && styles.labelDim]}>Add app</Text>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              {activePresetActions.length > 0 ? (
+                <View style={styles.presetPanel}>
+                  <Text style={styles.presetTitle}>{activePresetAppName}</Text>
+                  <View style={styles.presetActionsRow}>
+                    {activePresetActions.map((action) => (
+                      <TouchableOpacity
+                        key={action.id}
+                        style={styles.presetActionBtn}
+                        onPress={() => handlePresetActionPress(action.id)}
+                        activeOpacity={0.75}
+                      >
+                        <Text style={styles.presetActionText}>{action.label}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+              ) : null}
             </View>
           </View>
 
@@ -212,10 +382,17 @@ export function ButtonGrid({ url, onDisconnect }: Props) {
               {openApps.map((appName) => {
                 const state = openBtnStates[appName];
                 const iconUri = openAppIcons[appName];
+                const isActive = sameAppName(appName, activeAppName);
                 return (
                   <TouchableOpacity
                     key={appName}
-                    style={[styles.btn, state === 'ok' && styles.btnOk, state === 'error' && styles.btnError, !connected && styles.btnDisabled]}
+                    style={[
+                      styles.btn,
+                      isActive && styles.btnActive,
+                      state === 'ok' && styles.btnOk,
+                      state === 'error' && styles.btnError,
+                      !connected && styles.btnDisabled,
+                    ]}
                     onPress={() => handleOpenAppPress(appName)}
                     onLongPress={() => handleQuitApp(appName)}
                     delayLongPress={500}
@@ -239,6 +416,42 @@ export function ButtonGrid({ url, onDisconnect }: Props) {
           <View style={[styles.pageDot, currentPage === 1 && styles.pageDotActive]} />
         </View>
       </SafeAreaView>
+
+      <Modal visible={pickerVisible} transparent animationType="fade" onRequestClose={closePicker}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Select app</Text>
+            <TextInput
+              value={pickerQuery}
+              onChangeText={setPickerQuery}
+              placeholder="Search app..."
+              placeholderTextColor="#788299"
+              style={styles.searchInput}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <ScrollView style={styles.appList} showsVerticalScrollIndicator={false}>
+              {filteredApps.map((appName) => (
+                <TouchableOpacity
+                  key={appName}
+                  style={styles.appRow}
+                  onPress={() => handleSelectApp(appName)}
+                  activeOpacity={0.75}
+                >
+                  <Text style={styles.appRowText}>{appName}</Text>
+                </TouchableOpacity>
+              ))}
+              {filteredApps.length === 0 ? (
+                <Text style={styles.emptyListText}>No apps found</Text>
+              ) : null}
+            </ScrollView>
+            <TouchableOpacity onPress={closePicker} style={styles.cancelBtn}>
+              <Text style={styles.cancelBtnText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
     </View>
   );
 }
@@ -306,6 +519,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: PAD,
     gap: GAP,
   },
+  launcherPage: {
+    flex: 1,
+    justifyContent: 'flex-start',
+    paddingBottom: 12,
+    paddingTop: 8,
+  },
+  launcherHint: {
+    color: '#6c748a',
+    fontSize: 11,
+    textAlign: 'center',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    marginBottom: 14,
+  },
   btn: {
     width: BTN_SIZE,
     height: BTN_SIZE,
@@ -317,6 +544,87 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.08)',
     gap: 8,
     paddingHorizontal: 6,
+  },
+  glassSlot: {
+    width: BTN_SIZE,
+    height: BTN_SIZE,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    shadowColor: '#8adfff',
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 6 },
+    paddingHorizontal: 8,
+    gap: 10,
+  },
+  plusWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+  },
+  plusText: {
+    color: 'rgba(255,255,255,0.5)',
+    fontSize: 24,
+    fontWeight: '300',
+    marginTop: -2,
+  },
+  slotLabel: {
+    color: '#97a2b9',
+    fontSize: 12,
+    fontWeight: '500',
+    letterSpacing: 0.4,
+    textAlign: 'center',
+  },
+  btnActive: {
+    borderColor: CYAN,
+    backgroundColor: 'rgba(0, 229, 255, 0.12)',
+  },
+  presetPanel: {
+    marginTop: 14,
+    marginHorizontal: PAD,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+    backgroundColor: 'rgba(11,18,31,0.55)',
+    padding: 10,
+  },
+  presetTitle: {
+    color: '#a9bbdd',
+    fontSize: 12,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  presetActionsRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  presetActionBtn: {
+    flex: 1,
+    minHeight: 42,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(0,229,255,0.3)',
+    backgroundColor: 'rgba(0,229,255,0.12)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+  },
+  presetActionText: {
+    color: '#d9f9ff',
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
   },
   btnOk: {
     borderColor: GREEN,
@@ -369,5 +677,67 @@ const styles = StyleSheet.create({
   },
   pageDotActive: {
     backgroundColor: CYAN,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.62)',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  modalCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(13,18,33,0.95)',
+    padding: 14,
+    maxHeight: '72%',
+  },
+  modalTitle: {
+    color: '#e6ecff',
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 10,
+  },
+  searchInput: {
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderRadius: 12,
+    color: '#dbe5ff',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 10,
+    fontSize: 14,
+  },
+  appList: {
+    maxHeight: 350,
+  },
+  appRow: {
+    paddingVertical: 11,
+    paddingHorizontal: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255,255,255,0.12)',
+  },
+  appRowText: {
+    color: '#cdd6ed',
+    fontSize: 14,
+  },
+  emptyListText: {
+    color: '#7d87a0',
+    textAlign: 'center',
+    paddingVertical: 20,
+  },
+  cancelBtn: {
+    marginTop: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  cancelBtnText: {
+    color: '#d7dded',
+    fontSize: 14,
+    fontWeight: '600',
   },
 });
