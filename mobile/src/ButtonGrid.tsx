@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useWebSocket, WSMessage } from './useWebSocket';
+import { VideoPlayScreen } from './VideoPlayScreen';
 
 const CYAN = '#00e5ff';
 const GREEN = '#00e676';
@@ -34,6 +35,7 @@ const FIRST_PAGE_SLOTS = Array.from({ length: SLOT_COUNT }, (_, idx) => idx);
 const EMPTY_SLOTS = Array.from({ length: SLOT_COUNT }, () => null as string | null);
 
 type BtnState = 'ok' | 'error';
+type ScreenId = 'deck' | 'videoplay';
 type PresetAction = { id: string; label: string };
 
 const APP_PRESETS: Array<{ match: RegExp; actions: PresetAction[] }> = [
@@ -78,10 +80,13 @@ function sameAppName(a: string | null, b: string | null): boolean {
 type Props = {
   url: string;
   onDisconnect: () => void;
+  onConnectionLost?: () => void;
 };
 
 export function ButtonGrid({ url, onDisconnect }: Props) {
   const [connected, setConnected] = useState(false);
+  const [screen, setScreen] = useState<ScreenId>('deck');
+  const [menuOpen, setMenuOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState(0);
   const [launcherSlots, setLauncherSlots] = useState<Array<string | null>>(EMPTY_SLOTS);
   const [launcherIcons, setLauncherIcons] = useState<Record<string, string>>({});
@@ -100,6 +105,7 @@ export function ButtonGrid({ url, onDisconnect }: Props) {
   const [openAppIcons, setOpenAppIcons] = useState<Record<string, string>>({});
   const openAppIconsRef = useRef<Record<string, string>>({});
   const [openBtnStates, setOpenBtnStates] = useState<Record<string, BtnState>>({});
+  const [videoBtnStates, setVideoBtnStates] = useState<Record<string, BtnState>>({});
 
   // background animation
   const bgAnim = useRef(new Animated.Value(0)).current;
@@ -133,20 +139,23 @@ export function ButtonGrid({ url, onDisconnect }: Props) {
       });
   }, []);
 
-  useEffect(() => {
-    const apps = launcherSlots.filter((app): app is string => Boolean(app));
-    if (!connected || apps.length === 0) return;
-    const missing = apps.filter((appName) => !launcherIconsRef.current[appName]);
-    if (missing.length > 0) {
-      send({ type: 'get_icons', apps: missing, tag: 'launcher' });
-    }
-  }, [connected, launcherSlots]);
-
   const onMessage = useCallback((msg: WSMessage) => {
     if (msg.type === 'ack') {
       if (typeof msg.reqId === 'string') {
         const state: BtnState = msg.ok ? 'ok' : 'error';
-        if (msg.reqId.startsWith('slot:')) {
+        if (msg.reqId.startsWith('video:')) {
+          const actionId = msg.reqId.replace('video:', '');
+          setVideoBtnStates((s) => ({ ...s, [actionId]: state }));
+          setTimeout(
+            () =>
+              setVideoBtnStates((s) => {
+                const n = { ...s };
+                delete n[actionId];
+                return n;
+              }),
+            700
+          );
+        } else if (msg.reqId.startsWith('slot:')) {
           const idx = Number(msg.reqId.replace('slot:', ''));
           if (!Number.isNaN(idx)) {
             setSlotBtnStates((s) => ({ ...s, [idx]: state }));
@@ -197,9 +206,22 @@ export function ButtonGrid({ url, onDisconnect }: Props) {
       setConnected(true);
       send({ type: 'list_installed_apps' });
     },
-    onClose: () => { setConnected(false); onDisconnect(); },
-    onError: () => { setConnected(false); onDisconnect(); },
+    onClose: () => {
+      setConnected(false);
+    },
+    onError: () => {
+      setConnected(false);
+    },
   });
+
+  useEffect(() => {
+    const apps = launcherSlots.filter((app): app is string => Boolean(app));
+    if (!connected || apps.length === 0) return;
+    const missing = apps.filter((appName) => !launcherIconsRef.current[appName]);
+    if (missing.length > 0) {
+      send({ type: 'get_icons', apps: missing, tag: 'launcher' });
+    }
+  }, [connected, launcherSlots, send]);
 
   function persistLauncherSlots(next: Array<string | null>) {
     setLauncherSlots(next);
@@ -258,6 +280,28 @@ export function ButtonGrid({ url, onDisconnect }: Props) {
     });
   }
 
+  function handleVideoAction(actionId: string, payload?: Record<string, unknown>) {
+    let reqKey = actionId;
+    if (actionId === 'pointer-scroll') {
+      reqKey = Number(payload?.dy) > 0 ? 'scroll-down' : 'scroll-up';
+    }
+    send({
+      type: 'action',
+      id: actionId,
+      reqId: `video:${reqKey}`,
+      ...(payload ? { payload } : {}),
+    });
+  }
+
+  function handlePointerMove(dx: number, dy: number) {
+    send({ type: 'pointer_move', dx, dy });
+  }
+
+  function switchScreen(next: ScreenId) {
+    setScreen(next);
+    setMenuOpen(false);
+  }
+
   const pickerSource = installedApps.length > 0 ? installedApps : openApps;
   const q = pickerQuery.trim().toLowerCase();
   const filteredApps = pickerSource
@@ -288,7 +332,18 @@ export function ButtonGrid({ url, onDisconnect }: Props) {
       <SafeAreaView style={styles.safe}>
         {/* header */}
         <View style={styles.header}>
-          <View style={styles.headerSide} />
+          <View style={[styles.headerSide, styles.headerSideLeft]}>
+            <TouchableOpacity
+              onPress={() => setMenuOpen((open) => !open)}
+              style={styles.menuBtn}
+              activeOpacity={0.7}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <View style={styles.burgerBar} />
+              <View style={[styles.burgerBar, styles.burgerBarMid]} />
+              <View style={styles.burgerBar} />
+            </TouchableOpacity>
+          </View>
           <View style={styles.headerCenter}>
             <Text style={styles.title}>DECKER</Text>
             <View style={[styles.connDot, connected ? styles.connDotOn : styles.connDotOff]} />
@@ -300,6 +355,39 @@ export function ButtonGrid({ url, onDisconnect }: Props) {
           </View>
         </View>
 
+        {menuOpen ? (
+          <View style={styles.navMenu}>
+            <TouchableOpacity
+              style={[styles.navItem, screen === 'deck' && styles.navItemActive]}
+              onPress={() => switchScreen('deck')}
+              activeOpacity={0.75}
+            >
+              <Text style={[styles.navItemText, screen === 'deck' && styles.navItemTextActive]}>
+                Deck
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navItem, screen === 'videoplay' && styles.navItemActive]}
+              onPress={() => switchScreen('videoplay')}
+              activeOpacity={0.75}
+            >
+              <Text style={[styles.navItemText, screen === 'videoplay' && styles.navItemTextActive]}>
+                VideoPlay
+              </Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
+        {screen === 'videoplay' ? (
+          <VideoPlayScreen
+            connected={connected}
+            activeAppName={activeAppName}
+            btnStates={videoBtnStates}
+            onAction={handleVideoAction}
+            onPointerMove={handlePointerMove}
+          />
+        ) : (
+        <>
         {/* paged content */}
         <ScrollView
           horizontal
@@ -415,6 +503,8 @@ export function ButtonGrid({ url, onDisconnect }: Props) {
           <View style={[styles.pageDot, currentPage === 0 && styles.pageDotActive]} />
           <View style={[styles.pageDot, currentPage === 1 && styles.pageDotActive]} />
         </View>
+        </>
+        )}
       </SafeAreaView>
 
       <Modal visible={pickerVisible} transparent animationType="fade" onRequestClose={closePicker}>
@@ -479,6 +569,60 @@ const styles = StyleSheet.create({
   headerSide: {
     flex: 1,
     alignItems: 'flex-end',
+  },
+  headerSideLeft: {
+    alignItems: 'flex-start',
+  },
+  menuBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingVertical: 9,
+  },
+  burgerBar: {
+    width: 16,
+    height: 1.5,
+    borderRadius: 1,
+    backgroundColor: 'rgba(220, 228, 245, 0.75)',
+  },
+  burgerBarMid: {
+    width: 12,
+  },
+  navMenu: {
+    position: 'absolute',
+    top: 72,
+    left: PAD,
+    zIndex: 20,
+    minWidth: 168,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(10, 14, 24, 0.96)',
+    overflow: 'hidden',
+  },
+  navItem: {
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255,255,255,0.08)',
+  },
+  navItemActive: {
+    backgroundColor: 'rgba(0, 229, 255, 0.08)',
+  },
+  navItemText: {
+    color: '#8a93a8',
+    fontSize: 15,
+    fontWeight: '500',
+  },
+  navItemTextActive: {
+    color: CYAN,
+    fontWeight: '600',
   },
   headerCenter: {
     flexDirection: 'row',

@@ -86,6 +86,84 @@ async function pressChromeShortcut(scriptLine) {
   ]);
 }
 
+/** Send a key to whatever app is currently in front (browser, player, etc.). */
+async function pressFrontmostKey(keyCode, usingMods = '') {
+  const keyLine = usingMods
+    ? `key code ${keyCode} using {${usingMods}}`
+    : `key code ${keyCode}`;
+  await runAppleScript([
+    'tell application "System Events"',
+    'tell (first application process whose frontmost is true)',
+    keyLine,
+    'end tell',
+    'end tell',
+  ]);
+}
+
+async function logAccessibilityStatus() {
+  try {
+    await runAppleScript([
+      'tell application "System Events"',
+      'key code 63',
+      'end tell',
+    ]);
+    logEvent('✓', C.green, 'Accessibility: keystrokes enabled');
+  } catch (error) {
+    const msg = String(error.message || error);
+    if (!msg.includes('not allowed to send keystrokes')) return;
+    console.log(`\n  ${C.yellow}⚠${C.reset}  Accessibility required for VideoPlay and keyboard actions`);
+    console.log(`      System Settings → Privacy & Security → Accessibility`);
+    console.log(`      Enable: ${process.execPath}\n`);
+  }
+}
+
+function clampPointerDelta(value, max = 90) {
+  const n = Math.round(Number(value) || 0);
+  return Math.max(-max, Math.min(max, n));
+}
+
+const POINTER_BIN = path.join(__dirname, 'decker-pointer');
+const POINTER_SRC = path.join(__dirname, 'pointer.swift');
+let pointerBinaryReady = false;
+
+async function ensurePointerBinary() {
+  if (pointerBinaryReady) return;
+  try {
+    await fs.access(POINTER_BIN);
+    pointerBinaryReady = true;
+    return;
+  } catch {
+    // compile on first use
+  }
+  logEvent('…', C.yellow, 'Compiling decker-pointer (one-time)…');
+  await shell(`swiftc -O "${POINTER_SRC}" -o "${POINTER_BIN}"`);
+  pointerBinaryReady = true;
+  logEvent('✓', C.green, 'decker-pointer ready');
+}
+
+async function runPointer(args) {
+  await ensurePointerBinary();
+  const escaped = args.map((a) => String(a).replace(/"/g, '\\"'));
+  await shell(`"${POINTER_BIN}" ${escaped.join(' ')}`);
+}
+
+async function pointerMove(dx, dy) {
+  const x = clampPointerDelta(dx);
+  const y = clampPointerDelta(dy);
+  if (x === 0 && y === 0) return;
+  await runPointer(['move', x, y]);
+}
+
+async function pointerClick(button = 1) {
+  await runPointer(['click', button === 2 ? 'right' : 'left']);
+}
+
+async function pointerScroll(dy) {
+  const lines = clampPointerDelta(dy, 12);
+  if (lines === 0) return;
+  await runPointer(['scroll', lines]);
+}
+
 async function getOpenApplications() {
   const output = await runAppleScript([
     'tell application "System Events"',
@@ -271,6 +349,30 @@ actions['mute'] = async () => {
   ]);
 };
 
+actions['video-play-pause'] = async () => {
+  await pressFrontmostKey(49);
+};
+
+actions['video-seek-back'] = async () => {
+  await pressFrontmostKey(123);
+};
+
+actions['video-seek-forward'] = async () => {
+  await pressFrontmostKey(124);
+};
+
+actions['pointer-click-left'] = async () => {
+  await pointerClick(1);
+};
+
+actions['pointer-click-right'] = async () => {
+  await pointerClick(2);
+};
+
+actions['pointer-scroll'] = async ({ dy }) => {
+  await pointerScroll(dy);
+};
+
 actions['chrome-tab-left'] = async () => {
   await pressChromeShortcut('key code 123 using {command down, option down}');
 };
@@ -443,6 +545,13 @@ wss.on('connection', (ws) => {
       return;
     }
 
+    if (msg.type === 'pointer_move') {
+      pointerMove(msg.dx, msg.dy).catch((error) => {
+        logEvent('!', C.red, `pointer move: ${error.message}`);
+      });
+      return;
+    }
+
     if (msg.type === 'get_icons' && Array.isArray(msg.apps)) {
       Promise.all(msg.apps.map(async (appName) => [appName, await getAppIconBase64(appName)]))
         .then((entries) => {
@@ -536,6 +645,8 @@ server.listen(PORT, () => {
   console.log(`  Actions   : ${Object.keys(actions).join(', ')}`);
 
   bonjour.publish({ name: 'Decker', type: 'decker', protocol: 'tcp', port: PORT });
+
+  void logAccessibilityStatus();
 
   console.log(`\n  ${C.dim}Waiting for the iPhone to connect…${C.reset}\n`);
 });

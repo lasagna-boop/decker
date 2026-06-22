@@ -12,6 +12,8 @@ type Options = {
   onError?: () => void;
 };
 
+const RECONNECT_MS = 1500;
+
 export function useWebSocket(url: string | null, opts: Options) {
   const wsRef = useRef<WebSocket | null>(null);
   const optsRef = useRef(opts);
@@ -20,27 +22,47 @@ export function useWebSocket(url: string | null, opts: Options) {
   useEffect(() => {
     if (!url) return;
 
-    const ws = new WebSocket(url);
-    wsRef.current = ws;
+    let cancelled = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let ws: WebSocket | null = null;
 
-    ws.onopen = () => optsRef.current.onOpen?.();
-    ws.onclose = () => optsRef.current.onClose?.();
-    ws.onerror = () => optsRef.current.onError?.();
-    ws.onmessage = (e) => {
-      try {
-        const msg = JSON.parse(e.data) as WSMessage;
-        optsRef.current.onMessage(msg);
-      } catch {
-        // ignore malformed frames
-      }
-    };
+    function connect() {
+      if (cancelled) return;
+
+      ws = new WebSocket(url);
+      wsRef.current = ws;
+
+      ws.onopen = () => optsRef.current.onOpen?.();
+      ws.onclose = () => {
+        optsRef.current.onClose?.();
+        if (!cancelled) {
+          reconnectTimer = setTimeout(connect, RECONNECT_MS);
+        }
+      };
+      ws.onerror = () => optsRef.current.onError?.();
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data) as WSMessage;
+          optsRef.current.onMessage(msg);
+        } catch {
+          // ignore malformed frames
+        }
+      };
+    }
+
+    connect();
 
     return () => {
-      ws.onopen = null;
-      ws.onclose = null;
-      ws.onerror = null;
-      ws.onmessage = null;
-      ws.close();
+      cancelled = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (ws) {
+        ws.onopen = null;
+        ws.onclose = null;
+        ws.onerror = null;
+        ws.onmessage = null;
+        ws.close();
+      }
+      wsRef.current = null;
     };
   }, [url]);
 
@@ -52,4 +74,4 @@ export function useWebSocket(url: string | null, opts: Options) {
   }, []);
 
   return { send };
-}
+};

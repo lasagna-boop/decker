@@ -7,6 +7,8 @@
     "dev": "npx --yes concurrently@9 -k -n agent,expo -c cyan,magenta \"npm:dev:agent\" \"npm:dev:expo\"",
     "dev:agent": "cd agent && npm start",
     "dev:expo": "cd mobile && npx expo start",
-    "install:all": "cd agent && npm install && cd ../mobile && npm install"
+    "install:all": "cd agent && npm install && cd ../mobile && npm install",
+    "agent:install": "bash scripts/install-launch-agent.sh",
+    "agent:uninstall": "bash scripts/uninstall-launch-agent.sh"
   }
 }
