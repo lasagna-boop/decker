@@ -1,5 +1,13 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import React, { useState } from 'react';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  KeyboardAvoidingView,
+  Platform,
+} from 'react-native';
 import { TouchPad } from './TouchPad';
 
 const AMBER = '#d4a24c';
@@ -30,6 +38,12 @@ const POINTER_CONTROLS = [
   { id: 'pointer-scroll', label: '▼', hint: 'scroll down', payload: { dy: 4 }, key: 'scroll-down' },
 ] as const;
 
+const VOLUME_CONTROLS = [
+  { id: 'volume-down', label: 'Vol −', hint: 'quieter' },
+  { id: 'mute', label: 'Mute', hint: 'toggle' },
+  { id: 'volume-up', label: 'Vol +', hint: 'louder' },
+] as const;
+
 export function VideoPlayScreen({
   connected,
   activeAppName,
@@ -37,95 +51,177 @@ export function VideoPlayScreen({
   onAction,
   onPointerMove,
 }: Props) {
+  const [draft, setDraft] = useState('');
+
+  function sendText() {
+    if (!draft || !connected) return;
+    onAction('type-text', { text: draft });
+    setDraft('');
+  }
+
   return (
-    <View style={styles.root}>
-      <View style={styles.hero}>
-        {activeAppName ? (
-          <View style={styles.nowPlaying}>
-            <View style={styles.nowPlayingDot} />
-            <Text style={styles.nowPlayingText} numberOfLines={1}>
-              {activeAppName}
-            </Text>
-          </View>
-        ) : (
-          <Text style={styles.idleHint}>Focus your player on the Mac</Text>
-        )}
-      </View>
-
-      <TouchPad
-        enabled={connected}
-        onMove={onPointerMove}
-        onTap={() => onAction('pointer-click-left')}
-      />
-
-      <View style={styles.pointerRow}>
-        {POINTER_CONTROLS.map((control) => {
-          const stateKey =
-            'key' in control && control.key ? control.key : control.id;
-          const state = btnStates[stateKey] ?? btnStates[control.id];
-          return (
-            <TouchableOpacity
-              key={'key' in control && control.key ? control.key : control.id}
-              style={[
-                styles.pointerBtn,
-                state === 'ok' && styles.keyOk,
-                state === 'error' && styles.keyError,
-                !connected && styles.keyDisabled,
-              ]}
-              onPress={() => onAction(control.id, control.payload)}
-              disabled={!connected}
-              activeOpacity={0.72}
-            >
-              <Text style={styles.pointerBtnLabel}>{control.label}</Text>
-              <Text style={styles.pointerBtnHint}>{control.hint}</Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
-
-      <View style={styles.remote}>
-        {MEDIA_CONTROLS.map((control) => {
-          const state = btnStates[control.id];
-          const isPrimary = 'primary' in control && control.primary;
-          return (
-            <TouchableOpacity
-              key={control.id}
-              style={[
-                styles.key,
-                isPrimary && styles.keyPrimary,
-                state === 'ok' && styles.keyOk,
-                state === 'error' && styles.keyError,
-                !connected && styles.keyDisabled,
-              ]}
-              onPress={() => onAction(control.id)}
-              disabled={!connected}
-              activeOpacity={0.72}
-            >
-              <Text style={[styles.keyLabel, isPrimary && styles.keyLabelPrimary]}>
-                {control.label}
+    <KeyboardAvoidingView
+      style={styles.flex}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={72}
+    >
+      <View style={styles.root}>
+        <View style={styles.hero}>
+          {activeAppName ? (
+            <View style={styles.nowPlaying}>
+              <View style={styles.nowPlayingDot} />
+              <Text style={styles.nowPlayingText} numberOfLines={1}>
+                {activeAppName}
               </Text>
-              <Text style={styles.keyHint}>{control.hint}</Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
+            </View>
+          ) : (
+            <Text style={styles.idleHint}>Focus your player on the Mac</Text>
+          )}
+        </View>
 
-      {!connected ? <Text style={styles.offline}>Not connected to Mac</Text> : null}
-    </View>
+        <TouchPad
+          enabled={connected}
+          onMove={onPointerMove}
+          onTap={() => onAction('pointer-click-left')}
+        />
+
+        <View style={styles.pointerRow}>
+          {POINTER_CONTROLS.map((control) => {
+            const stateKey =
+              'key' in control && control.key ? control.key : control.id;
+            const state = btnStates[stateKey] ?? btnStates[control.id];
+            return (
+              <TouchableOpacity
+                key={'key' in control && control.key ? control.key : control.id}
+                style={[
+                  styles.pointerBtn,
+                  state === 'ok' && styles.keyOk,
+                  state === 'error' && styles.keyError,
+                  !connected && styles.keyDisabled,
+                ]}
+                onPress={() => onAction(control.id, control.payload)}
+                disabled={!connected}
+                activeOpacity={0.72}
+              >
+                <Text style={styles.pointerBtnLabel}>{control.label}</Text>
+                <Text style={styles.pointerBtnHint}>{control.hint}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        <View style={styles.remote}>
+          {MEDIA_CONTROLS.map((control) => {
+            const state = btnStates[control.id];
+            const isPrimary = 'primary' in control && control.primary;
+            return (
+              <TouchableOpacity
+                key={control.id}
+                style={[
+                  styles.key,
+                  isPrimary && styles.keyPrimary,
+                  state === 'ok' && styles.keyOk,
+                  state === 'error' && styles.keyError,
+                  !connected && styles.keyDisabled,
+                ]}
+                onPress={() => onAction(control.id)}
+                disabled={!connected}
+                activeOpacity={0.72}
+              >
+                <Text style={[styles.keyLabel, isPrimary && styles.keyLabelPrimary]}>
+                  {control.label}
+                </Text>
+                <Text style={styles.keyHint}>{control.hint}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        <View style={styles.volumeRow}>
+          {VOLUME_CONTROLS.map((control) => {
+            const state = btnStates[control.id];
+            return (
+              <TouchableOpacity
+                key={control.id}
+                style={[
+                  styles.volumeBtn,
+                  state === 'ok' && styles.keyOk,
+                  state === 'error' && styles.keyError,
+                  !connected && styles.keyDisabled,
+                ]}
+                onPress={() => onAction(control.id)}
+                disabled={!connected}
+                activeOpacity={0.72}
+              >
+                <Text style={styles.volumeBtnLabel}>{control.label}</Text>
+                <Text style={styles.volumeBtnHint}>{control.hint}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        <View style={styles.typeRow}>
+          <TextInput
+            value={draft}
+            onChangeText={setDraft}
+            placeholder="Type on Mac…"
+            placeholderTextColor="rgba(160,148,128,0.55)"
+            style={styles.typeInput}
+            editable={connected}
+            autoCapitalize="none"
+            autoCorrect={false}
+            returnKeyType="send"
+            onSubmitEditing={sendText}
+          />
+          <TouchableOpacity
+            style={[styles.sendBtn, (!connected || !draft) && styles.sendBtnDisabled]}
+            onPress={sendText}
+            disabled={!connected || !draft}
+            activeOpacity={0.75}
+          >
+            <Text style={styles.sendBtnText}>Send</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.typeKeysRow}>
+          <TouchableOpacity
+            style={[styles.typeKeyBtn, !connected && styles.keyDisabled]}
+            onPress={() => onAction('type-key', { key: 'backspace' })}
+            disabled={!connected}
+            activeOpacity={0.72}
+          >
+            <Text style={styles.typeKeyLabel}>⌫</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.typeKeyBtn, !connected && styles.keyDisabled]}
+            onPress={() => onAction('type-key', { key: 'enter' })}
+            disabled={!connected}
+            activeOpacity={0.72}
+          >
+            <Text style={styles.typeKeyLabel}>↵</Text>
+          </TouchableOpacity>
+        </View>
+
+        {!connected ? <Text style={styles.offline}>Not connected to Mac</Text> : null}
+      </View>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
+  flex: {
+    flex: 1,
+  },
   root: {
     flex: 1,
     paddingHorizontal: 20,
-    paddingBottom: 16,
+    paddingBottom: 8,
     paddingTop: 4,
-    gap: 12,
+    gap: 10,
   },
   hero: {
     alignItems: 'center',
-    minHeight: 36,
+    minHeight: 32,
     justifyContent: 'center',
   },
   nowPlaying: {
@@ -163,7 +259,7 @@ const styles = StyleSheet.create({
   },
   pointerBtn: {
     flex: 1,
-    minHeight: 52,
+    minHeight: 48,
     borderRadius: 14,
     borderWidth: 1,
     borderColor: 'rgba(212, 162, 76, 0.2)',
@@ -190,7 +286,7 @@ const styles = StyleSheet.create({
   },
   key: {
     flex: 1,
-    minHeight: 88,
+    minHeight: 76,
     borderRadius: 18,
     borderWidth: 1,
     borderColor: 'rgba(212, 162, 76, 0.2)',
@@ -219,6 +315,86 @@ const styles = StyleSheet.create({
     fontSize: 9,
     letterSpacing: 1.3,
     textTransform: 'uppercase',
+  },
+  volumeRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  volumeBtn: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(212, 162, 76, 0.2)',
+    backgroundColor: 'rgba(18, 14, 10, 0.72)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+  },
+  volumeBtnLabel: {
+    color: 'rgba(244, 228, 198, 0.92)',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  volumeBtnHint: {
+    color: 'rgba(160, 148, 128, 0.6)',
+    fontSize: 9,
+    letterSpacing: 1.1,
+    textTransform: 'uppercase',
+  },
+  typeRow: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'center',
+  },
+  typeInput: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(212, 162, 76, 0.22)',
+    backgroundColor: 'rgba(18, 14, 10, 0.82)',
+    color: 'rgba(244, 228, 198, 0.95)',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    fontSize: 15,
+  },
+  sendBtn: {
+    minHeight: 44,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(212, 162, 76, 0.42)',
+    backgroundColor: 'rgba(212, 162, 76, 0.14)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sendBtnDisabled: {
+    opacity: 0.35,
+  },
+  sendBtnText: {
+    color: 'rgba(244, 228, 198, 0.95)',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  typeKeysRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  typeKeyBtn: {
+    flex: 1,
+    minHeight: 40,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(212, 162, 76, 0.18)',
+    backgroundColor: 'rgba(18, 14, 10, 0.72)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  typeKeyLabel: {
+    color: 'rgba(244, 228, 198, 0.9)',
+    fontSize: 18,
+    fontWeight: '500',
   },
   keyOk: {
     borderColor: GREEN,

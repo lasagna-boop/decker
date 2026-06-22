@@ -284,6 +284,8 @@ export function ButtonGrid({ url, onDisconnect }: Props) {
     let reqKey = actionId;
     if (actionId === 'pointer-scroll') {
       reqKey = Number(payload?.dy) > 0 ? 'scroll-down' : 'scroll-up';
+    } else if (actionId === 'type-key' && payload?.key) {
+      reqKey = `type-key-${String(payload.key)}`;
     }
     send({
       type: 'action',

@@ -349,6 +349,29 @@ actions['mute'] = async () => {
   ]);
 };
 
+actions['type-text'] = async ({ text }) => {
+  const value = String(text ?? '');
+  if (!value) return;
+  const safe = escapeAppleScriptString(value);
+  await runAppleScript([
+    `set the clipboard to "${safe}"`,
+    'delay 0.06',
+    'tell application "System Events"',
+    'tell (first application process whose frontmost is true)',
+    'key code 9 using {command down}',
+    'end tell',
+    'end tell',
+  ]);
+};
+
+actions['type-key'] = async ({ key }) => {
+  const k = String(key ?? '');
+  if (k === 'enter') await pressFrontmostKey(36);
+  else if (k === 'backspace') await pressFrontmostKey(51);
+  else if (k === 'escape') await pressFrontmostKey(53);
+  else throw new Error(`unknown key: ${k}`);
+};
+
 actions['video-play-pause'] = async () => {
   await pressFrontmostKey(49);
 };
