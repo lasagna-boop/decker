@@ -1,17 +1,24 @@
 import React, { useRef, useMemo } from 'react';
 import { View, Text, PanResponder, StyleSheet, ViewStyle, StyleProp } from 'react-native';
-
-const SENSITIVITY = 1.65;
+import { TRACKPAD_SENSITIVITY_DEFAULT } from './settings';
 
 type Props = {
   enabled: boolean;
+  sensitivity?: number;
   onMove: (dx: number, dy: number) => void;
   onTap: () => void;
   style?: StyleProp<ViewStyle>;
 };
 
-export function TouchPad({ enabled, onMove, onTap, style }: Props) {
+export function TouchPad({
+  enabled,
+  sensitivity = TRACKPAD_SENSITIVITY_DEFAULT,
+  onMove,
+  onTap,
+  style,
+}: Props) {
   const enabledRef = useRef(enabled);
+  const sensitivityRef = useRef(sensitivity);
   const onMoveRef = useRef(onMove);
   const onTapRef = useRef(onTap);
   const lastPoint = useRef({ x: 0, y: 0 });
@@ -19,6 +26,7 @@ export function TouchPad({ enabled, onMove, onTap, style }: Props) {
   const moved = useRef(false);
 
   enabledRef.current = enabled;
+  sensitivityRef.current = sensitivity;
   onMoveRef.current = onMove;
   onTapRef.current = onTap;
 
@@ -40,8 +48,9 @@ export function TouchPad({ enabled, onMove, onTap, style }: Props) {
           if (!enabledRef.current) return;
 
           const { locationX, locationY } = evt.nativeEvent;
-          remainder.current.x += (locationX - lastPoint.current.x) * SENSITIVITY;
-          remainder.current.y += (locationY - lastPoint.current.y) * SENSITIVITY;
+          const gain = sensitivityRef.current;
+          remainder.current.x += (locationX - lastPoint.current.x) * gain;
+          remainder.current.y += (locationY - lastPoint.current.y) * gain;
           lastPoint.current = { x: locationX, y: locationY };
 
           const dx = Math.trunc(remainder.current.x);

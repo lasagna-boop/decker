@@ -26,10 +26,13 @@ const GREEN = '#00e676';
 const RED = '#ff3d00';
 
 type BtnState = 'ok' | 'error';
-type ToolId = 'none' | 'trackpad' | 'type';
+export type VideoPlayToolId = 'none' | 'trackpad' | 'type';
 
 type Props = {
   connected: boolean;
+  trackpadSensitivity?: number;
+  tool: VideoPlayToolId;
+  onToolChange: (tool: VideoPlayToolId) => void;
   btnStates: Record<string, BtnState>;
   onAction: (id: string, payload?: Record<string, unknown>) => void;
   onPointerMove: (dx: number, dy: number) => void;
@@ -50,11 +53,13 @@ function stateStyle(state?: BtnState) {
 
 export function VideoPlayScreen({
   connected,
+  trackpadSensitivity,
+  tool,
+  onToolChange,
   btnStates,
   onAction,
   onPointerMove,
 }: Props) {
-  const [tool, setTool] = useState<ToolId>('none');
   const [draft, setDraft] = useState('');
   const syncedRef = useRef('');
   const inputRef = useRef<TextInput>(null);
@@ -64,13 +69,11 @@ export function VideoPlayScreen({
     Keyboard.dismiss();
   }
 
-  function toggleTool(next: ToolId) {
+  function toggleTool(next: VideoPlayToolId) {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setTool((current) => {
-      const closing = current === next;
-      if (closing || next !== 'type') dismissKeyboard();
-      return closing ? 'none' : next;
-    });
+    const closing = tool === next;
+    if (closing || next !== 'type') dismissKeyboard();
+    onToolChange(closing ? 'none' : next);
   }
 
   function handleDraftChange(next: string) {
@@ -104,6 +107,7 @@ export function VideoPlayScreen({
         <View style={styles.trackpadPanel}>
           <TouchPad
             enabled={connected}
+            sensitivity={trackpadSensitivity}
             onMove={onPointerMove}
             onTap={() => onAction('pointer-click-left')}
             style={styles.touchPad}

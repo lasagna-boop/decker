@@ -17,7 +17,13 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useWebSocket, WSMessage } from './useWebSocket';
-import { VideoPlayScreen } from './VideoPlayScreen';
+import { VideoPlayScreen, VideoPlayToolId } from './VideoPlayScreen';
+import { SettingsScreen } from './SettingsScreen';
+import {
+  TRACKPAD_SENSITIVITY_DEFAULT,
+  loadTrackpadSensitivity,
+  saveTrackpadSensitivity,
+} from './settings';
 
 const CYAN = '#00e5ff';
 const GREEN = '#00e676';
@@ -35,7 +41,7 @@ const FIRST_PAGE_SLOTS = Array.from({ length: SLOT_COUNT }, (_, idx) => idx);
 const EMPTY_SLOTS = Array.from({ length: SLOT_COUNT }, () => null as string | null);
 
 type BtnState = 'ok' | 'error';
-type ScreenId = 'deck' | 'videoplay';
+type ScreenId = 'deck' | 'videoplay' | 'settings';
 type PresetAction = { id: string; label: string };
 
 const APP_PRESETS: Array<{ match: RegExp; actions: PresetAction[] }> = [
@@ -96,6 +102,10 @@ export function ButtonGrid({
   const [connected, setConnected] = useState(false);
   const [screen, setScreen] = useState<ScreenId>('videoplay');
   const [menuOpen, setMenuOpen] = useState(false);
+  const [trackpadSensitivity, setTrackpadSensitivity] = useState(
+    TRACKPAD_SENSITIVITY_DEFAULT
+  );
+  const [videoPlayTool, setVideoPlayTool] = useState<VideoPlayToolId>('none');
   const [currentPage, setCurrentPage] = useState(0);
   const [launcherSlots, setLauncherSlots] = useState<Array<string | null>>(EMPTY_SLOTS);
   const [launcherIcons, setLauncherIcons] = useState<Record<string, string>>({});
@@ -147,6 +157,15 @@ export function ButtonGrid({
         // best effort
       });
   }, []);
+
+  useEffect(() => {
+    void loadTrackpadSensitivity().then(setTrackpadSensitivity);
+  }, []);
+
+  function handleTrackpadSensitivityChange(value: number) {
+    setTrackpadSensitivity(value);
+    void saveTrackpadSensitivity(value);
+  }
 
   const onMessage = useCallback((msg: WSMessage) => {
     if (msg.type === 'hello' && typeof msg.name === 'string' && msg.name.trim()) {
@@ -398,6 +417,15 @@ export function ButtonGrid({
                 VideoPlay
               </Text>
             </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navItem, screen === 'settings' && styles.navItemActive]}
+              onPress={() => switchScreen('settings')}
+              activeOpacity={0.75}
+            >
+              <Text style={[styles.navItemText, screen === 'settings' && styles.navItemTextActive]}>
+                Settings
+              </Text>
+            </TouchableOpacity>
             {onChangeMac ? (
               <TouchableOpacity
                 style={styles.navItem}
@@ -416,9 +444,17 @@ export function ButtonGrid({
         {screen === 'videoplay' ? (
           <VideoPlayScreen
             connected={connected}
+            trackpadSensitivity={trackpadSensitivity}
+            tool={videoPlayTool}
+            onToolChange={setVideoPlayTool}
             btnStates={videoBtnStates}
             onAction={handleVideoAction}
             onPointerMove={handlePointerMove}
+          />
+        ) : screen === 'settings' ? (
+          <SettingsScreen
+            trackpadSensitivity={trackpadSensitivity}
+            onTrackpadSensitivityChange={handleTrackpadSensitivityChange}
           />
         ) : (
         <>
