@@ -76,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }()
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    applyAppIcon()
     buildWindow()
     startEverything()
     refreshStatus()
@@ -87,6 +88,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     pollTimer = timer
 
     NSApp.activate(ignoringOtherApps: true)
+  }
+
+  private func applyAppIcon() {
+    let candidates = [
+      Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+      Bundle.main.url(forResource: "AppIcon", withExtension: "png"),
+      repoRoot.appendingPathComponent("mac/assets/AppIcon.icns"),
+      repoRoot.appendingPathComponent("mac/assets/icon-1024.png"),
+    ]
+    for url in candidates {
+      guard let url, let image = NSImage(contentsOf: url) else { continue }
+      NSApp.applicationIconImage = image
+      return
+    }
   }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

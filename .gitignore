@@ -7,4 +7,5 @@ node_modules/
 agent/decker-pointer
 mac/DeckerMac
 mac/DeckerMac.app/
+mac/assets/AppIcon.iconset/
 diagram/

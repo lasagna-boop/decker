@@ -5,6 +5,8 @@ One window that starts **everything** the phone needs:
 1. **Agent** — WebSocket + Bonjour on `:4242`
 2. **Expo Metro** — phone UI on `:8081` (`exp://<mac-ip>:8081`)
 
+App icon: `mac/assets/AppIcon.icns` (bundled into `DeckerMac.app` by `run.sh`).
+
 ## Run
 
 ```bash
