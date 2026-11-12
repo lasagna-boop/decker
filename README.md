@@ -91,12 +91,23 @@ tail -f ~/Library/Logs/decker-agent.log
 
 Switch via the burger menu. VideoPlay is the default.
 
+## Mac app (branch `feature/mac-app`)
+
+Window app that starts **agent + Expo** together (what you used to run from two terminals):
+
+```bash
+./mac/run.sh
+```
+
+See `mac/README.md`.
+
 ## Layout
 
 ```
 Decker/
   agent/     Node WebSocket server + OS actions (port 4242)
   mobile/    Expo / React Native UI
+  mac/       Menu bar wrapper (starts agent + Bonjour)
   scripts/   LaunchAgent install / uninstall
 ```
 
