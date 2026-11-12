@@ -9,25 +9,44 @@ const CYAN = '#00e5ff';
 
 function AppRoot() {
   const insets = useSafeAreaInsets();
-  const { state, favorites, connectManual, retry, connectDevice, leaveDeck, tryAutoConnectOnly } =
-    useDiscovery();
+  const {
+    state,
+    favorites,
+    primaryMac,
+    connectManual,
+    retry,
+    connectDevice,
+    leaveDeck,
+    changeMac,
+    rememberDevice,
+    tryAutoConnectOnly,
+  } = useDiscovery();
 
   if (state.phase === 'manual') {
     return (
       <ButtonGrid
         url={state.url}
         onDisconnect={leaveDeck}
+        onChangeMac={() => {
+          void changeMac();
+        }}
         onConnectionLost={tryAutoConnectOnly}
+        onMacName={(name) => {
+          const ip = state.url.replace(/^ws:\/\//, '').split(':')[0];
+          void rememberDevice({ ip, name, url: state.url });
+        }}
       />
     );
   }
 
   if (state.phase === 'connecting') {
+    const macLabel = state.name || primaryMac?.name;
     return (
       <View style={[styles.connecting, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
         <Text style={styles.title}>DECKER</Text>
         <ActivityIndicator size="large" color={CYAN} style={styles.spinner} />
-        <Text style={styles.body}>Connecting to your Mac…</Text>
+        <Text style={styles.body}>Connecting</Text>
+        {macLabel ? <Text style={styles.macName}>{macLabel}</Text> : null}
       </View>
     );
   }
@@ -36,6 +55,7 @@ function AppRoot() {
     <DiscoveryScreen
       state={state}
       favorites={favorites}
+      primaryMac={primaryMac}
       onConnect={(device: Device) => {
         void connectDevice(device);
       }}
@@ -73,7 +93,16 @@ const styles = StyleSheet.create({
   },
   body: {
     color: '#8a93a8',
-    fontSize: 14,
+    fontSize: 15,
     letterSpacing: 0.4,
+    marginBottom: 8,
+  },
+  macName: {
+    color: '#f0f4ff',
+    fontSize: 22,
+    fontWeight: '600',
+    letterSpacing: 0.2,
+    textAlign: 'center',
+    maxWidth: '86%',
   },
 });

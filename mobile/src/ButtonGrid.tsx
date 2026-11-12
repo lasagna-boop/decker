@@ -80,10 +80,18 @@ function sameAppName(a: string | null, b: string | null): boolean {
 type Props = {
   url: string;
   onDisconnect: () => void;
+  onChangeMac?: () => void;
   onConnectionLost?: () => void;
+  onMacName?: (name: string) => void;
 };
 
-export function ButtonGrid({ url, onDisconnect, onConnectionLost }: Props) {
+export function ButtonGrid({
+  url,
+  onDisconnect,
+  onChangeMac,
+  onConnectionLost,
+  onMacName,
+}: Props) {
   const insets = useSafeAreaInsets();
   const [connected, setConnected] = useState(false);
   const [screen, setScreen] = useState<ScreenId>('videoplay');
@@ -141,6 +149,10 @@ export function ButtonGrid({ url, onDisconnect, onConnectionLost }: Props) {
   }, []);
 
   const onMessage = useCallback((msg: WSMessage) => {
+    if (msg.type === 'hello' && typeof msg.name === 'string' && msg.name.trim()) {
+      onMacName?.(msg.name.trim());
+      return;
+    }
     if (msg.type === 'ack') {
       if (typeof msg.reqId === 'string') {
         const state: BtnState = msg.ok ? 'ok' : 'error';
@@ -199,7 +211,7 @@ export function ButtonGrid({ url, onDisconnect, onConnectionLost }: Props) {
         send({ type: 'get_icons', apps: newApps, tag: 'open' });
       }
     }
-  }, []);
+  }, [onMacName]);
 
   const reconnectFails = useRef(0);
 
@@ -357,8 +369,7 @@ export function ButtonGrid({ url, onDisconnect, onConnectionLost }: Props) {
             </TouchableOpacity>
           </View>
           <View style={styles.headerCenter}>
-            <Text style={styles.title}>DECKER</Text>
-            <View style={[styles.connDot, connected ? styles.connDotOn : styles.connDotOff]} />
+            <Text style={[styles.title, !connected && styles.titleOffline]}>DECKER</Text>
           </View>
           <View style={styles.headerSide}>
             <TouchableOpacity onPress={onDisconnect} style={styles.disconnectBtn}>
@@ -387,13 +398,24 @@ export function ButtonGrid({ url, onDisconnect, onConnectionLost }: Props) {
                 VideoPlay
               </Text>
             </TouchableOpacity>
+            {onChangeMac ? (
+              <TouchableOpacity
+                style={styles.navItem}
+                onPress={() => {
+                  setMenuOpen(false);
+                  onChangeMac();
+                }}
+                activeOpacity={0.75}
+              >
+                <Text style={styles.navItemMuted}>Change Mac</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
         ) : null}
 
         {screen === 'videoplay' ? (
           <VideoPlayScreen
             connected={connected}
-            activeAppName={activeAppName}
             btnStates={videoBtnStates}
             onAction={handleVideoAction}
             onPointerMove={handlePointerMove}
@@ -636,10 +658,14 @@ const styles = StyleSheet.create({
     color: CYAN,
     fontWeight: '600',
   },
+  navItemMuted: {
+    color: '#6a7388',
+    fontSize: 14,
+    fontWeight: '500',
+  },
   headerCenter: {
-    flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    justifyContent: 'center',
   },
   title: {
     color: CYAN,
@@ -647,13 +673,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 8,
   },
-  connDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+  titleOffline: {
+    color: 'rgba(0, 229, 255, 0.35)',
   },
-  connDotOn: { backgroundColor: GREEN },
-  connDotOff: { backgroundColor: '#555' },
   disconnectBtn: {
     padding: 8,
   },

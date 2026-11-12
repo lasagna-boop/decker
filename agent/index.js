@@ -59,6 +59,29 @@ function shell(cmd) {
   });
 }
 
+/** Prefer macOS ComputerName — os.hostname() is often just "Mac". */
+let macDisplayName = os.hostname() || 'Mac';
+
+async function resolveMacDisplayName() {
+  async function scutil(key) {
+    try {
+      const value = String(await shell(`scutil --get ${key}`)).trim();
+      return value || null;
+    } catch {
+      return null;
+    }
+  }
+
+  macDisplayName =
+    (await scutil('ComputerName')) ||
+    (await scutil('LocalHostName')) ||
+    os.hostname() ||
+    'Mac';
+  return macDisplayName;
+}
+
+void resolveMacDisplayName();
+
 function escapeAppleScriptString(value) {
   return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
@@ -617,7 +640,7 @@ function getLocalIP() {
 const server = http.createServer((req, res) => {
   if (req.method === 'GET' && req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
-    res.end(JSON.stringify({ status: 'ok', port: PORT, name: os.hostname() }));
+    res.end(JSON.stringify({ status: 'ok', port: PORT, name: macDisplayName }));
     return;
   }
   res.writeHead(404);
@@ -642,6 +665,9 @@ wss.on('connection', (ws) => {
   broadcastPeers();
   const addr = shortAddr(ws._socket?.remoteAddress);
   logEvent('▲', C.green, `client connected  ${C.bold}${addr}${C.reset}  (peers: ${clients.size})`);
+  if (ws.readyState === ws.OPEN) {
+    ws.send(JSON.stringify({ type: 'hello', name: macDisplayName }));
+  }
   const stopPolling = startPolling(ws);
 
   ws.on('message', (data) => {
@@ -742,20 +768,23 @@ server.listen(PORT, () => {
   const ip = getLocalIP();
   const wsUrl = `ws://${ip}:${PORT}`;
 
-  console.log('\n╔══════════════════════════════════════╗');
-  console.log('║        Decker Agent — Running        ║');
-  console.log('╚══════════════════════════════════════╝\n');
-  console.log(`  Local IP  : ${ip}`);
-  console.log(`  Port      : ${PORT}`);
-  console.log(`  WebSocket : ${wsUrl}`);
-  console.log(`  Health    : http://${ip}:${PORT}/health`);
-  console.log(`  Actions   : ${Object.keys(actions).join(', ')}`);
+  void resolveMacDisplayName().then((name) => {
+    console.log('\n╔══════════════════════════════════════╗');
+    console.log('║        Decker Agent — Running        ║');
+    console.log('╚══════════════════════════════════════╝\n');
+    console.log(`  Mac       : ${name}`);
+    console.log(`  Local IP  : ${ip}`);
+    console.log(`  Port      : ${PORT}`);
+    console.log(`  WebSocket : ${wsUrl}`);
+    console.log(`  Health    : http://${ip}:${PORT}/health`);
+    console.log(`  Actions   : ${Object.keys(actions).join(', ')}`);
 
-  bonjour.publish({ name: 'Decker', type: 'decker', protocol: 'tcp', port: PORT });
+    bonjour.publish({ name: `Decker (${name})`, type: 'decker', protocol: 'tcp', port: PORT });
 
-  void logAccessibilityStatus();
+    void logAccessibilityStatus();
 
-  console.log(`\n  ${C.dim}Waiting for the iPhone to connect…${C.reset}\n`);
+    console.log(`\n  ${C.dim}Waiting for the iPhone to connect…${C.reset}\n`);
+  });
 });
 
 process.on('SIGINT', () => {

@@ -30,7 +30,6 @@ type ToolId = 'none' | 'trackpad' | 'type';
 
 type Props = {
   connected: boolean;
-  activeAppName: string | null;
   btnStates: Record<string, BtnState>;
   onAction: (id: string, payload?: Record<string, unknown>) => void;
   onPointerMove: (dx: number, dy: number) => void;
@@ -51,7 +50,6 @@ function stateStyle(state?: BtnState) {
 
 export function VideoPlayScreen({
   connected,
-  activeAppName,
   btnStates,
   onAction,
   onPointerMove,
@@ -102,13 +100,6 @@ export function VideoPlayScreen({
 
   return (
     <View style={styles.root}>
-      <View style={styles.statusRow}>
-        <View style={[styles.liveDot, connected ? styles.liveDotOn : styles.liveDotOff]} />
-        <Text style={styles.statusText} numberOfLines={1}>
-          {!connected ? 'Offline' : activeAppName ? activeAppName : 'Ready'}
-        </Text>
-      </View>
-
       {tool === 'trackpad' ? (
         <View style={styles.trackpadPanel}>
           <TouchPad
@@ -327,27 +318,6 @@ const styles = StyleSheet.create({
     paddingBottom: 10,
     paddingTop: 2,
     gap: 12,
-  },
-  statusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    minHeight: 28,
-  },
-  liveDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-  },
-  liveDotOn: { backgroundColor: AMBER },
-  liveDotOff: { backgroundColor: 'rgba(120, 100, 80, 0.55)' },
-  statusText: {
-    color: CREAM_DIM,
-    fontSize: 14,
-    fontWeight: '500',
-    letterSpacing: 0.3,
-    maxWidth: '80%',
   },
   trackpadPanel: {
     flex: 1,

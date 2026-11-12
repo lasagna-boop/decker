@@ -17,13 +17,28 @@ const CYAN = '#00e5ff';
 type Props = {
   state: DiscoveryState;
   favorites: FavoriteDevice[];
+  primaryMac: Device | null;
   onConnect: (device: Device) => void;
   onManual: (ip: string) => void;
   onRetry: () => void;
 };
 
-export function DiscoveryScreen({ state, favorites, onConnect, onManual, onRetry }: Props) {
+function isSameMac(a: Device, b: Device | null): boolean {
+  if (!b) return false;
+  if (a.ip === b.ip) return true;
+  return (a.name || '').trim().toLowerCase() === (b.name || '').trim().toLowerCase();
+}
+
+export function DiscoveryScreen({
+  state,
+  favorites,
+  primaryMac,
+  onConnect,
+  onManual,
+  onRetry,
+}: Props) {
   const [ipInput, setIpInput] = useState('');
+  const otherFavorites = favorites.filter((f) => !isSameMac(f, primaryMac));
 
   return (
     <KeyboardAvoidingView
@@ -33,55 +48,95 @@ export function DiscoveryScreen({ state, favorites, onConnect, onManual, onRetry
       <Text style={styles.title}>DECKER</Text>
       <Text style={styles.subtitle}>Macro Pad</Text>
 
-      {favorites.length > 0 && (
+      {primaryMac ? (
         <View style={styles.section}>
-          <Text style={styles.sectionLabel}>FAVORITES</Text>
+          <Text style={styles.sectionLabel}>THIS MAC</Text>
+          <TouchableOpacity
+            style={[styles.deviceRow, styles.primaryRow]}
+            onPress={() => onConnect(primaryMac)}
+            activeOpacity={0.7}
+          >
+            <View style={styles.deviceInfo}>
+              <Text style={styles.deviceName}>{primaryMac.name}</Text>
+              <Text style={styles.deviceIp}>
+                {primaryMac.ip}:4242
+              </Text>
+            </View>
+            <View style={styles.connectBtn}>
+              <Text style={styles.connectBtnText}>Connect</Text>
+            </View>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
+      {otherFavorites.length > 0 ? (
+        <View style={styles.section}>
+          <Text style={styles.sectionLabel}>OTHER MACS</Text>
           <FlatList
-            data={favorites}
+            data={otherFavorites}
             keyExtractor={(d) => `favorite-${d.ip}`}
             scrollEnabled={false}
             renderItem={({ item }) => (
-              <TouchableOpacity style={styles.deviceRow} onPress={() => onConnect(item)} activeOpacity={0.7}>
+              <TouchableOpacity
+                style={styles.deviceRow}
+                onPress={() => onConnect(item)}
+                activeOpacity={0.7}
+              >
                 <View style={styles.deviceInfo}>
                   <Text style={styles.deviceName}>{item.name}</Text>
-                  <Text style={styles.deviceIp}>{item.ip}:{4242}</Text>
+                  <Text style={styles.deviceIp}>
+                    {item.ip}:4242
+                  </Text>
                 </View>
                 <View style={styles.connectBtn}>
-                  <Text style={styles.connectBtnText}>Connect</Text>
+                  <Text style={styles.connectBtnText}>Use</Text>
                 </View>
               </TouchableOpacity>
             )}
             ItemSeparatorComponent={() => <View style={styles.separator} />}
           />
         </View>
-      )}
+      ) : null}
 
       {state.phase === 'scanning' && (
         <View style={styles.center}>
           <ActivityIndicator size="large" color={CYAN} />
-          <Text style={styles.body}>Scanning local network…</Text>
-          <Text style={styles.hint}>Make sure the agent is running on your Mac.</Text>
+          <Text style={styles.body}>Looking for your Mac…</Text>
+          <Text style={styles.hint}>Mac and iPhone must be on the same Wi‑Fi.</Text>
         </View>
       )}
 
       {state.phase === 'found' && (
         <View style={styles.section}>
-          <Text style={styles.sectionLabel}>DEVICES FOUND</Text>
+          <Text style={styles.sectionLabel}>
+            {primaryMac ? 'NEARBY' : 'CHOOSE YOUR MAC'}
+          </Text>
           <FlatList
             data={state.devices}
             keyExtractor={(d) => d.ip}
             scrollEnabled={false}
-            renderItem={({ item }) => (
-              <TouchableOpacity style={styles.deviceRow} onPress={() => onConnect(item)} activeOpacity={0.7}>
-                <View style={styles.deviceInfo}>
-                  <Text style={styles.deviceName}>{item.name}</Text>
-                  <Text style={styles.deviceIp}>{item.ip}:{4242}</Text>
-                </View>
-                <View style={styles.connectBtn}>
-                  <Text style={styles.connectBtnText}>Connect</Text>
-                </View>
-              </TouchableOpacity>
-            )}
+            renderItem={({ item }) => {
+              const isPrimary = isSameMac(item, primaryMac);
+              return (
+                <TouchableOpacity
+                  style={[styles.deviceRow, isPrimary && styles.primaryRow]}
+                  onPress={() => onConnect(item)}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.deviceInfo}>
+                    <Text style={styles.deviceName}>{item.name}</Text>
+                    <Text style={styles.deviceIp}>
+                      {item.ip}:4242
+                    </Text>
+                  </View>
+                  <View style={styles.connectBtn}>
+                    <Text style={styles.connectBtnText}>
+                      {isPrimary ? 'Connect' : 'Use this Mac'}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            }}
             ItemSeparatorComponent={() => <View style={styles.separator} />}
           />
           <TouchableOpacity onPress={onRetry} style={styles.retryBtn}>
@@ -95,10 +150,10 @@ export function DiscoveryScreen({ state, favorites, onConnect, onManual, onRetry
           <Text style={styles.warn}>
             {state.phase === 'error'
               ? state.message
-              : 'No Mac found yet — tap Scan again or enter IP'}
+              : 'No Mac found — start the Decker agent, then scan'}
           </Text>
           <Text style={styles.hint}>
-            Enter your Mac's local IP manually{'\n'}(shown in the agent terminal):
+            Or enter the Mac IP shown in the agent:
           </Text>
           <View style={styles.row}>
             <TextInput
@@ -136,6 +191,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     padding: 24,
+    gap: 20,
   },
   title: {
     color: CYAN,
@@ -148,7 +204,7 @@ const styles = StyleSheet.create({
     color: '#555',
     fontSize: 13,
     letterSpacing: 3,
-    marginBottom: 48,
+    marginBottom: 12,
   },
   center: {
     alignItems: 'center',
@@ -173,6 +229,10 @@ const styles = StyleSheet.create({
     padding: 16,
     borderWidth: 1,
     borderColor: '#1e1e1e',
+  },
+  primaryRow: {
+    borderColor: 'rgba(0, 229, 255, 0.35)',
+    backgroundColor: 'rgba(0, 229, 255, 0.06)',
   },
   deviceInfo: {
     flex: 1,
@@ -254,6 +314,7 @@ const styles = StyleSheet.create({
   retryBtn: {
     marginTop: 4,
     padding: 8,
+    alignSelf: 'center',
   },
   retryText: {
     color: '#555',

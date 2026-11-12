@@ -14,12 +14,12 @@ export type FavoriteDevice = Device & {
 };
 
 export type DiscoveryState =
-  | { phase: 'connecting' }
+  | { phase: 'connecting'; name?: string }
   | { phase: 'scanning' }
   | { phase: 'found'; devices: Device[] }
   | { phase: 'empty' }
   | { phase: 'error'; message: string }
-  | { phase: 'manual'; url: string };
+  | { phase: 'manual'; url: string; name: string };
 
 const PORT = 4242;
 const PROBE_TIMEOUT_MS = 800;
@@ -119,8 +119,25 @@ function dedupeFavoritesByName(
   return Array.from(byName.values()).sort((a, b) => b.lastUsedAt - a.lastUsedAt);
 }
 
-function pickBestDevice(devices: Device[], localIP: string | null): Device | null {
+function deviceKey(device: Device): string {
+  return (device.name || device.ip).trim().toLowerCase();
+}
+
+function pickBestDevice(
+  devices: Device[],
+  localIP: string | null,
+  preferred: Device | null = null
+): Device | null {
   if (devices.length === 0) return null;
+
+  if (preferred) {
+    const preferredKey = deviceKey(preferred);
+    const match =
+      devices.find((d) => d.ip === preferred.ip) ??
+      devices.find((d) => deviceKey(d) === preferredKey);
+    if (match) return match;
+  }
+
   if (!localIP) return devices[0];
   return dedupeDevicesByName(devices, localIP)[0] ?? devices[0];
 }
@@ -165,6 +182,14 @@ async function loadPrimaryMac(): Promise<Device | null> {
 async function savePrimaryMac(device: Device) {
   try {
     await AsyncStorage.setItem(PRIMARY_MAC_KEY, JSON.stringify(device));
+  } catch {
+    // best effort
+  }
+}
+
+async function clearPrimaryMac() {
+  try {
+    await AsyncStorage.removeItem(PRIMARY_MAC_KEY);
   } catch {
     // best effort
   }
@@ -215,8 +240,11 @@ function uniqueCandidates(primary: Device | null, favorites: FavoriteDevice[]): 
 export function useDiscovery() {
   const [state, setState] = useState<DiscoveryState>({ phase: 'connecting' });
   const [favorites, setFavorites] = useState<FavoriteDevice[]>([]);
+  const [primaryMac, setPrimaryMac] = useState<Device | null>(null);
   const stateRef = useRef(state);
+  const primaryRef = useRef<Device | null>(null);
   stateRef.current = state;
+  primaryRef.current = primaryMac;
 
   const runAutoConnect = useCallback(async (): Promise<Device | null> => {
     const [primary, favs, localIP] = await Promise.all([
@@ -224,18 +252,29 @@ export function useDiscovery() {
       loadFavorites(),
       Network.getIpAddressAsync().catch(() => null),
     ]);
+    setPrimaryMac(primary);
+    primaryRef.current = primary;
+
     const candidates = uniqueCandidates(primary, favs);
     if (candidates.length === 0) return null;
 
+    // Probe primary first — fastest path for daily use.
+    if (primary) {
+      const livePrimary = await probeHost(primary.ip, PROBE_FAST_TIMEOUT_MS);
+      if (livePrimary) return livePrimary;
+    }
+
+    const others = candidates.filter((c) => !primary || c.ip !== primary.ip);
     const results = await Promise.all(
-      candidates.map((candidate) => probeHost(candidate.ip, PROBE_FAST_TIMEOUT_MS))
+      others.map((candidate) => probeHost(candidate.ip, PROBE_FAST_TIMEOUT_MS))
     );
     const alive = results.filter((device): device is Device => device !== null);
-    return pickBestDevice(alive, localIP);
+    return pickBestDevice(alive, localIP, primary);
   }, []);
 
   const connectDevice = useCallback(async (device: Device) => {
-    setState({ phase: 'connecting' });
+    const pendingName = device.name || device.ip;
+    setState({ phase: 'connecting', name: pendingName });
 
     const localIP = await Network.getIpAddressAsync().catch(() => '');
     const verified = await probeHost(device.ip, PROBE_TIMEOUT_MS);
@@ -250,15 +289,22 @@ export function useDiscovery() {
       return;
     }
 
-    const toConnect = verified;
+    const toConnect = {
+      ...verified,
+      name: verified.name || pendingName,
+    };
 
     const next = await persistDevice(toConnect);
+    setPrimaryMac(toConnect);
+    primaryRef.current = toConnect;
     setFavorites(dedupeFavoritesByName(next, localIP));
-    setState({ phase: 'manual', url: toConnect.url });
+    setState({ phase: 'manual', url: toConnect.url, name: toConnect.name });
   }, []);
 
   const rememberDevice = useCallback(async (device: Device) => {
     const next = await persistDevice(device);
+    setPrimaryMac(device);
+    primaryRef.current = device;
     setFavorites(next);
   }, []);
 
@@ -289,7 +335,11 @@ export function useDiscovery() {
   }, []);
 
   const tryAutoConnectOnly = useCallback(async (): Promise<boolean> => {
-    setState({ phase: 'connecting' });
+    const known = primaryRef.current;
+    setState({
+      phase: 'connecting',
+      name: known?.name || known?.ip,
+    });
     const device = await runAutoConnect();
     if (device) {
       await connectDevice(device);
@@ -300,7 +350,11 @@ export function useDiscovery() {
   }, [connectDevice, runAutoConnect]);
 
   const tryConnectOrScan = useCallback(async () => {
-    setState({ phase: 'connecting' });
+    const known = primaryRef.current;
+    setState({
+      phase: 'connecting',
+      name: known?.name || known?.ip,
+    });
     const device = await runAutoConnect();
     if (device) {
       await connectDevice(device);
@@ -313,6 +367,15 @@ export function useDiscovery() {
     setState({ phase: 'empty' });
   }, []);
 
+  /** Forget primary and open discovery so the user can pick another Mac. */
+  const changeMac = useCallback(async () => {
+    await clearPrimaryMac();
+    setPrimaryMac(null);
+    primaryRef.current = null;
+    setState({ phase: 'scanning' });
+    await runScan();
+  }, [runScan]);
+
   useEffect(() => {
     void (async () => {
       const localIP = (await Network.getIpAddressAsync().catch(() => '')) ?? '';
@@ -320,6 +383,8 @@ export function useDiscovery() {
         loadPrimaryMac(),
         localIP ? refreshFavorites(localIP) : loadFavorites(),
       ]);
+      setPrimaryMac(primary);
+      primaryRef.current = primary;
       setFavorites(favs);
       // Known Macs → fast auto-connect. Brand-new install → full scan once.
       if (uniqueCandidates(primary, favs).length === 0) {
@@ -361,11 +426,13 @@ export function useDiscovery() {
   return {
     state,
     favorites,
+    primaryMac,
     connectManual,
     retry,
     rememberDevice,
     connectDevice,
     leaveDeck,
+    changeMac,
     tryAutoConnectOnly,
     tryConnectOrScan,
   };
