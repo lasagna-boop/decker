@@ -11,6 +11,9 @@
       "infoPlist": {
         "NSLocalNetworkUsageDescription": "Decker needs local network access to discover your Mac on the same Wi-Fi."
       }
-    }
+    },
+    "plugins": [
+      "expo-status-bar"
+    ]
   }
 }

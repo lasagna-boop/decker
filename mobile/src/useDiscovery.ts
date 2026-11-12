@@ -188,19 +188,15 @@ async function persistDevice(device: Device): Promise<FavoriteDevice[]> {
 
 async function refreshFavorites(localIP: string): Promise<FavoriteDevice[]> {
   const favs = await loadFavorites();
-  const checks = await Promise.all(
+  // Soft refresh only — never delete favorites because of a slow/failed probe on launch.
+  const refreshed = await Promise.all(
     favs.map(async (fav) => {
       const live = await probeHost(fav.ip, PROBE_FAST_TIMEOUT_MS);
-      if (!live) return null;
-      return { ...fav, ...live };
+      if (!live) return fav;
+      return { ...fav, ...live, lastUsedAt: fav.lastUsedAt };
     })
   );
-  const alive = checks.filter((f): f is FavoriteDevice => f !== null);
-  const deduped = dedupeFavoritesByName(alive, localIP);
-  if (deduped.length !== favs.length) {
-    await saveFavorites(deduped);
-  }
-  return deduped;
+  return dedupeFavoritesByName(refreshed, localIP);
 }
 
 function uniqueCandidates(primary: Device | null, favorites: FavoriteDevice[]): Device[] {
@@ -320,11 +316,19 @@ export function useDiscovery() {
   useEffect(() => {
     void (async () => {
       const localIP = (await Network.getIpAddressAsync().catch(() => '')) ?? '';
-      const favs = localIP ? await refreshFavorites(localIP) : await loadFavorites();
+      const [primary, favs] = await Promise.all([
+        loadPrimaryMac(),
+        localIP ? refreshFavorites(localIP) : loadFavorites(),
+      ]);
       setFavorites(favs);
-      void tryAutoConnectOnly();
+      // Known Macs → fast auto-connect. Brand-new install → full scan once.
+      if (uniqueCandidates(primary, favs).length === 0) {
+        void tryConnectOrScan();
+      } else {
+        void tryAutoConnectOnly();
+      }
     })();
-  }, [tryAutoConnectOnly]);
+  }, [tryAutoConnectOnly, tryConnectOrScan]);
 
   useEffect(() => {
     const onAppStateChange = (next: AppStateStatus) => {

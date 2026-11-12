@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   ScrollView,
   StyleSheet,
-  SafeAreaView,
   Dimensions,
   Animated,
   Easing,
@@ -16,6 +15,7 @@ import {
   NativeScrollEvent,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useWebSocket, WSMessage } from './useWebSocket';
 import { VideoPlayScreen } from './VideoPlayScreen';
 
@@ -83,9 +83,10 @@ type Props = {
   onConnectionLost?: () => void;
 };
 
-export function ButtonGrid({ url, onDisconnect }: Props) {
+export function ButtonGrid({ url, onDisconnect, onConnectionLost }: Props) {
+  const insets = useSafeAreaInsets();
   const [connected, setConnected] = useState(false);
-  const [screen, setScreen] = useState<ScreenId>('deck');
+  const [screen, setScreen] = useState<ScreenId>('videoplay');
   const [menuOpen, setMenuOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState(0);
   const [launcherSlots, setLauncherSlots] = useState<Array<string | null>>(EMPTY_SLOTS);
@@ -200,14 +201,23 @@ export function ButtonGrid({ url, onDisconnect }: Props) {
     }
   }, []);
 
+  const reconnectFails = useRef(0);
+
   const { send } = useWebSocket(url, {
     onMessage,
     onOpen: () => {
+      reconnectFails.current = 0;
       setConnected(true);
       send({ type: 'list_installed_apps' });
     },
     onClose: () => {
       setConnected(false);
+      reconnectFails.current += 1;
+      // Same URL keeps failing (e.g. Mac got a new IP) — rediscover instead of looping forever.
+      if (reconnectFails.current >= 3 && onConnectionLost) {
+        reconnectFails.current = 0;
+        onConnectionLost();
+      }
     },
     onError: () => {
       setConnected(false);
@@ -283,7 +293,7 @@ export function ButtonGrid({ url, onDisconnect }: Props) {
   function handleVideoAction(actionId: string, payload?: Record<string, unknown>) {
     let reqKey = actionId;
     if (actionId === 'pointer-scroll') {
-      reqKey = Number(payload?.dy) > 0 ? 'scroll-down' : 'scroll-up';
+      reqKey = Number(payload?.dy) > 0 ? 'scroll-up' : 'scroll-down';
     } else if (actionId === 'type-key' && payload?.key) {
       reqKey = `type-key-${String(payload.key)}`;
     }
@@ -331,7 +341,7 @@ export function ButtonGrid({ url, onDisconnect }: Props) {
       />
       <View style={styles.overlay} pointerEvents="none" />
 
-      <SafeAreaView style={styles.safe}>
+      <View style={[styles.safe, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
         {/* header */}
         <View style={styles.header}>
           <View style={[styles.headerSide, styles.headerSideLeft]}>
@@ -507,7 +517,7 @@ export function ButtonGrid({ url, onDisconnect }: Props) {
         </View>
         </>
         )}
-      </SafeAreaView>
+      </View>
 
       <Modal visible={pickerVisible} transparent animationType="fade" onRequestClose={closePicker}>
         <View style={styles.modalBackdrop}>

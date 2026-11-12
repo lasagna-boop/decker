@@ -141,10 +141,15 @@ async function ensurePointerBinary() {
   logEvent('✓', C.green, 'decker-pointer ready');
 }
 
+let pointerQueue = Promise.resolve();
+
 async function runPointer(args) {
   await ensurePointerBinary();
   const escaped = args.map((a) => String(a).replace(/"/g, '\\"'));
-  await shell(`"${POINTER_BIN}" ${escaped.join(' ')}`);
+  const job = () => shell(`"${POINTER_BIN}" ${escaped.join(' ')}`);
+  // Serialize moves/clicks so relative warps don't race.
+  pointerQueue = pointerQueue.then(job, job);
+  return pointerQueue;
 }
 
 async function pointerMove(dx, dy) {
@@ -349,27 +354,106 @@ actions['mute'] = async () => {
   ]);
 };
 
-actions['type-text'] = async ({ text }) => {
+let typeQueue = Promise.resolve();
+
+function enqueueType(job) {
+  typeQueue = typeQueue.then(job, job);
+  return typeQueue;
+}
+
+/** Type into the frontmost app via real keystrokes — never touches the clipboard. */
+async function typeTextViaKeystrokes(text) {
   const value = String(text ?? '');
   if (!value) return;
-  const safe = escapeAppleScriptString(value);
+
+  // Split on newlines: AppleScript keystroke won't emit Return for \n.
+  const parts = value.split(/\r\n|\n|\r/);
+  for (let i = 0; i < parts.length; i++) {
+    const chunk = parts[i];
+    if (chunk) {
+      // Keep chunks small so System Events stays responsive while streaming from phone.
+      const STEP = 24;
+      for (let start = 0; start < chunk.length; start += STEP) {
+        const piece = chunk.slice(start, start + STEP);
+        const safe = escapeAppleScriptString(piece);
+        await runAppleScript([
+          'tell application "System Events"',
+          'tell (first application process whose frontmost is true)',
+          `keystroke "${safe}"`,
+          'end tell',
+          'end tell',
+        ]);
+      }
+    }
+    if (i < parts.length - 1) {
+      await pressFrontmostKey(36);
+    }
+  }
+}
+
+actions['type-text'] = async ({ text }) => {
+  await enqueueType(() => typeTextViaKeystrokes(text));
+};
+
+actions['type-key'] = async ({ key, count }) => {
+  const k = String(key ?? '');
+  const n = Math.max(1, Math.min(64, Math.round(Number(count) || 1)));
+  await enqueueType(async () => {
+    if (k === 'enter') {
+      for (let i = 0; i < n; i++) await pressFrontmostKey(36);
+      return;
+    }
+    if (k === 'backspace') {
+      for (let i = 0; i < n; i++) await pressFrontmostKey(51);
+      return;
+    }
+    if (k === 'escape') {
+      await pressFrontmostKey(53);
+      return;
+    }
+    throw new Error(`unknown key: ${k}`);
+  });
+};
+
+/** Hotfix: pull frontmost (or Arc) window onto primary display and park the cursor. */
+actions['window-to-main'] = async ({ appName } = {}) => {
+  const preferred = String(appName || '').trim();
+  const targetScript = preferred
+    ? [
+        `set targetName to "${escapeAppleScriptString(preferred)}"`,
+        'tell application targetName to activate',
+        'delay 0.2',
+      ]
+    : [
+        'tell application "System Events"',
+        'set targetName to name of first application process whose frontmost is true',
+        'end tell',
+        'tell application targetName to activate',
+        'delay 0.15',
+      ];
+
   await runAppleScript([
-    `set the clipboard to "${safe}"`,
-    'delay 0.06',
+    ...targetScript,
     'tell application "System Events"',
-    'tell (first application process whose frontmost is true)',
-    'key code 9 using {command down}',
+    'tell process targetName',
+    'set frontmost to true',
+    'if (count of windows) is 0 then error "No visible window"',
+    'try',
+    'set value of attribute "AXFullScreen" of window 1 to false',
+    'end try',
+    'set position of window 1 to {0, 0}',
+    'set size of window 1 to {1800, 1100}',
     'end tell',
     'end tell',
   ]);
-};
 
-actions['type-key'] = async ({ key }) => {
-  const k = String(key ?? '');
-  if (k === 'enter') await pressFrontmostKey(36);
-  else if (k === 'backspace') await pressFrontmostKey(51);
-  else if (k === 'escape') await pressFrontmostKey(53);
-  else throw new Error(`unknown key: ${k}`);
+  // Park cursor near top-left of the external/main screen so it isn't lost off-display.
+  try {
+    await runPointer(['move', -4000, -4000]);
+    await runPointer(['move', 200, 200]);
+  } catch {
+    // best effort
+  }
 };
 
 actions['video-play-pause'] = async () => {

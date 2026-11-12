@@ -93,7 +93,9 @@ export function DiscoveryScreen({ state, favorites, onConnect, onManual, onRetry
       {(state.phase === 'empty' || state.phase === 'error') && (
         <View style={styles.center}>
           <Text style={styles.warn}>
-            {state.phase === 'error' ? state.message : 'No Decker agents found'}
+            {state.phase === 'error'
+              ? state.message
+              : 'No Mac found yet — tap Scan again or enter IP'}
           </Text>
           <Text style={styles.hint}>
             Enter your Mac's local IP manually{'\n'}(shown in the agent terminal):

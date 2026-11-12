@@ -1,5 +1,5 @@
 import React, { useRef, useMemo } from 'react';
-import { View, Text, PanResponder, StyleSheet } from 'react-native';
+import { View, Text, PanResponder, StyleSheet, ViewStyle, StyleProp } from 'react-native';
 
 const SENSITIVITY = 1.65;
 
@@ -7,9 +7,10 @@ type Props = {
   enabled: boolean;
   onMove: (dx: number, dy: number) => void;
   onTap: () => void;
+  style?: StyleProp<ViewStyle>;
 };
 
-export function TouchPad({ enabled, onMove, onTap }: Props) {
+export function TouchPad({ enabled, onMove, onTap, style }: Props) {
   const enabledRef = useRef(enabled);
   const onMoveRef = useRef(onMove);
   const onTapRef = useRef(onTap);
@@ -66,7 +67,7 @@ export function TouchPad({ enabled, onMove, onTap }: Props) {
 
   return (
     <View
-      style={[styles.pad, !enabled && styles.padDisabled]}
+      style={[styles.pad, !enabled && styles.padDisabled, style]}
       {...panResponder.panHandlers}
     >
       <View style={styles.gridH} pointerEvents="none" />
@@ -81,7 +82,7 @@ export function TouchPad({ enabled, onMove, onTap }: Props) {
 const styles = StyleSheet.create({
   pad: {
     flex: 1,
-    minHeight: 160,
+    minHeight: 260,
     borderRadius: 22,
     borderWidth: 1,
     borderColor: 'rgba(212, 162, 76, 0.24)',
